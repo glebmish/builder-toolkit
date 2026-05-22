@@ -23,6 +23,7 @@ input=$(cat)
 
 extract_command() {
   if ! command -v jq >/dev/null 2>&1; then
+    # shellcheck disable=SC2016  # backticks are literal text in the message
     printf 'git-history-rewrite hook requires `jq`; install it or remove the plugin.\n' >&2
     return 1
   fi

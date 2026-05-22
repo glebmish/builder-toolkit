@@ -39,7 +39,7 @@ mk_repo() {
   local d
   d=$(mktemp -d)
   TMP_DIRS+=("$d")
-  cd "$d"
+  cd "$d" || { echo "FATAL: cd $d failed" >&2; exit 1; }
   git init -q -b main
   git config user.email "test@test"
   git config user.name "Test"
@@ -307,8 +307,6 @@ run_case "absolute /opt/homebrew/bin/git push --force" \
 
 # `cd <path> ;` (semicolon, not &&) — should follow cd and then gate.
 mk_repo >/dev/null
-REPO_FOR_CD=$(pwd)
-mk_repo >/dev/null
 echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
 echo c > c; git add c; git commit -q -m "C"
 REPO_WITH_ORPHANS=$(pwd)
@@ -353,11 +351,13 @@ run_case "sh -c single-quoted git push --force" \
 
 # $(...) — git inside command substitution should be detected.
 mk_repo >/dev/null
+# shellcheck disable=SC2016  # the $() is literal test input, not shell substitution
 run_case "echo \$(git push --force ...) inside command sub" \
   'echo $(git push --force origin main)' 2 "force-with-lease"
 
 # <(...) — git inside process substitution should be detected.
 mk_repo >/dev/null
+# shellcheck disable=SC2016  # the <() is literal test input, not shell substitution
 run_case "diff <(git push --force) f — process substitution" \
   'diff <(git push --force origin main) f' 2 "force-with-lease"
 

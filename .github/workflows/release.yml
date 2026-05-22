@@ -1,0 +1,74 @@
+name: Release
+
+# Publishes a GitHub Release whenever a v* tag is pushed.
+#
+# For a Claude Code plugin marketplace the "artifact" is the source tree at
+# the tag — `/plugin marketplace add <owner>/<repo>` clones the repo directly.
+# This workflow therefore:
+#   1. Re-runs the offline validators against the tagged tree (good-hygiene
+#      smoke; the skill calls it "not load-bearing" but cheap to keep honest).
+#   2. Cuts a GitHub Release with auto-generated notes so users get a
+#      versioned anchor and changelog.
+#
+# Versioning posture: git tags `vX.Y.Z` are canonical and must agree with the
+# `metadata.version` in `.claude-plugin/marketplace.json` and the `version` in
+# each plugin's `.claude-plugin/plugin.json`. The validate job enforces that.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate tagged tree
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Extract version from tag
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check marketplace.json version matches tag
+        run: |
+          manifest_version=$(jq -r '.metadata.version' .claude-plugin/marketplace.json)
+          if [ "$manifest_version" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "::error::marketplace.json metadata.version ($manifest_version) does not match tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Check plugin versions match tag
+        run: |
+          fail=0
+          while IFS= read -r manifest; do
+            plugin_version=$(jq -r '.version' "$manifest")
+            if [ "$plugin_version" != "${{ steps.tag.outputs.version }}" ]; then
+              echo "::error::$manifest version ($plugin_version) does not match tag (${{ steps.tag.outputs.version }})"
+              fail=1
+            fi
+          done < <(find plugins -name plugin.json -path '*/.claude-plugin/*')
+          exit "$fail"
+
+  release:
+    name: Create GitHub Release
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

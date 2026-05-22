@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref (PR head or branch).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: preflight.test.sh (${{ matrix.os }})
+    # The hook is documented as bash 3.2 compatible. macOS system bash is 3.2;
+    # ubuntu runners ship bash 5+. Running both catches regressions in either direction.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install jq (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+          jq --version
+
+      - name: Verify jq present (macOS)
+        if: runner.os == 'macOS'
+        # macOS runners ship jq pre-installed; assert rather than reinstall.
+        run: jq --version
+
+      - name: Show bash version
+        run: bash --version
+
+      - name: Run preflight hook tests
+        run: bash plugins/git-history-rewrite/tests/git-history-rewrite/preflight.test.sh
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --version
+
+      - name: Lint hook and tests
+        # -x follows sourced files; -P sets search path for those. Not strictly
+        # needed today (no `source` directives), but cheap to enable.
+        run: |
+          shellcheck \
+            plugins/git-history-rewrite/skills/git-history-rewrite/hooks/preflight.sh \
+            plugins/git-history-rewrite/tests/git-history-rewrite/preflight.test.sh
+
+  manifests:
+    name: JSON manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Validate JSON syntax
+        # Claude Code's plugin manifest schema is not published as a public JSON
+        # Schema, so we limit ourselves to syntactic validation here. Upgrade to
+        # schema validation if/when Anthropic ships one.
+        run: |
+          set -eu
+          for f in \
+            .claude-plugin/marketplace.json \
+            plugins/git-history-rewrite/.claude-plugin/plugin.json
+          do
+            echo "==> $f"
+            jq empty "$f"
+          done
