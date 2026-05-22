@@ -329,7 +329,84 @@ run_case "cd <intermediate> && cd <repo-with-orphans> && git reset --hard <B>" \
 run_case "env var prefix on push --force" \
   "FOO=bar git push --force origin main" 2 "force-with-lease"
 
-# -- Section 7: jq-missing error path ----------------------------------------
+# -- Section 7: find-git matcher — quoted / wrapped / nested forms ------------
+#
+# The matcher walks the command string and detects every `git` token at a
+# word boundary, including inside `bash -c`, `sh -c`, `eval`, `$(...)`,
+# `<(...)`, heredocs, function bodies, and lone `&` chains. Each detected
+# git invocation is gated by the existing per-subcommand checks. The
+# trade-off is that literal `git` tokens appearing as data inside echo/printf
+# arguments also block — documented in SKILL.md.
+
+echo "=== find-git matcher: wrapped / quoted / nested forms ==="
+
+# bash -c / sh -c — git tokens inside the quoted payload must be detected.
+mk_repo >/dev/null
+run_case "bash -c double-quoted git filter-branch" \
+  'bash -c "git filter-branch --tree-filter true HEAD"' 2 "deprecated upstream"
+run_case "bash -c double-quoted git push --force" \
+  'bash -c "git push --force origin main"' 2 "force-with-lease"
+run_case "bash -c single-quoted git filter-branch" \
+  "bash -c 'git filter-branch --tree-filter true HEAD'" 2 "deprecated upstream"
+run_case "sh -c single-quoted git push --force" \
+  "sh -c 'git push --force origin main'" 2 "force-with-lease"
+
+# $(...) — git inside command substitution should be detected.
+mk_repo >/dev/null
+run_case "echo \$(git push --force ...) inside command sub" \
+  'echo $(git push --force origin main)' 2 "force-with-lease"
+
+# <(...) — git inside process substitution should be detected.
+mk_repo >/dev/null
+run_case "diff <(git push --force) f — process substitution" \
+  'diff <(git push --force origin main) f' 2 "force-with-lease"
+
+# eval — git inside an eval'd string should be detected.
+mk_repo >/dev/null
+run_case "eval \"git push --force ...\"" \
+  'eval "git push --force origin main"' 2 "force-with-lease"
+
+# Lone `&` between commands should still find the second git invocation.
+mk_repo >/dev/null
+run_case "lone & — git status & git push --force" \
+  "git status & git push --force origin main" 2 "force-with-lease"
+
+# Function body — git inside `f() { ...; }` should be detected.
+mk_repo >/dev/null
+run_case "git inside function body — f() { git push --force; }; f" \
+  "f() { git push --force origin main; }; f" 2 "force-with-lease"
+
+# Heredoc — git tokens inside an in-line heredoc body must be detected.
+mk_repo >/dev/null
+run_case "heredoc — bash <<EOF / git push --force / EOF" \
+  "$(printf 'bash <<EOF\ngit push --force origin main\nEOF\n')" 2 "force-with-lease"
+
+# Intentional new false-positive class: git as data inside echo/printf.
+# Documented in SKILL.md: these block under the new matcher.
+mk_repo >/dev/null
+run_case "echo with literal 'git push --force' in message (intentional)" \
+  'echo "Running git push --force"' 2 "force-with-lease"
+
+mk_repo >/dev/null
+echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
+echo c > c; git add c; git commit -q -m "C"
+run_case "printf with literal 'git reset --hard <B>' (intentional orphan-block)" \
+  "printf 'use: git reset --hard $B'" 2 "unreachable from any ref"
+
+# Word-boundary sanity: identifiers like `gitlab` or `digit` must NOT match
+# `git`. They lack the required boundary before the `git` substring.
+mk_repo >/dev/null
+run_case "gitlab in path — not a git invocation" \
+  "echo gitlab-runner status" 0
+run_case "digit identifier — not a git invocation" \
+  "echo digit" 0
+
+# Performance pre-filter sanity: a non-git Bash command exits 0.
+mk_repo >/dev/null
+run_case "non-git ls -la — pre-filter exits 0" \
+  "ls -la" 0
+
+# -- Section 8: jq-missing error path ----------------------------------------
 echo "=== jq-missing error path ==="
 
 # Run the hook with a PATH that has bash + standard tools but no jq.

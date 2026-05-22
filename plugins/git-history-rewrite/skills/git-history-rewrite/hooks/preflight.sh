@@ -6,14 +6,20 @@
 #   1  — hook script error (harness lets the command proceed, logs the error)
 #
 # Design note: this hook is a guard against typical LLM idioms, not an
-# adversarial sandbox. It splits on `;`, `&&`, `||`, `|`, and newlines, and
-# strips common prefixes (subshell `(`, env-var assignments, `cd <path>`,
-# git global options, absolute paths to git). It does NOT parse `bash -c
-# '<wrapped>'` or arbitrarily quoted shell payloads — see SKILL.md.
+# adversarial sandbox. It locates every `git` token in the raw command text
+# (including inside `bash -c`, `sh -c`, `eval`, `$(...)`, `<(...)`, heredocs,
+# and function bodies), strips git's known global options, and dispatches to
+# per-subcommand gates. Trade-off: a literal `git push --force ...` appearing
+# as data inside an echo/printf string will also block — see SKILL.md.
 
 set -uo pipefail
 
 input=$(cat)
+
+# Performance pre-filter: skip the jq fork entirely for commands that have no
+# `git` substring at all. Catches the ~60% of Bash invocations that aren't
+# git-related (ls, cat, pwd, npm, ...).
+[[ "$input" != *git* ]] && exit 0
 
 extract_command() {
   if ! command -v jq >/dev/null 2>&1; then
@@ -26,98 +32,103 @@ extract_command() {
 command=$(extract_command) || exit 1
 [[ -z "$command" ]] && exit 0
 
+# Second pre-filter after JSON extract — the JSON might have contained "git"
+# only in unrelated metadata. (Cheap; do not skip if literal "git" present.)
+[[ "$command" != *git* ]] && exit 0
+
 block() {
   printf 'git-history-rewrite: blocked by safety hook.\n\n%s\n' "$1" >&2
   exit 2
 }
 
-# ---------- segment normalization ------------------------------------------
+# ---------- leading `cd <path>` pre-pass -----------------------------------
 #
-# Split the raw command on `;`, `&&`, `||`, `|`, and newlines. For each
-# segment, strip:
-#   - leading whitespace
-#   - leading subshell `(`
-#   - leading env-var assignments (KEY=val ...)
-#   - leading `cd <path>` (chdir-ing into <path> per cd encountered)
-# until what's left either starts with `git` (or `/.../git`) or doesn't.
-# Then strip git's known global options to expose the subcommand.
-
-# Replace each of `;`, `&&`, `||`, `|`, newline with a single record separator
-# so we can iterate with `while read`. Use \x1f (unit separator) which is
-# extremely unlikely to occur in command text.
-split_segments() {
-  local raw="$1"
-  # Order matters: turn `&&`/`||` into the separator first (two chars) before
-  # collapsing single `|`/`;`/newline.
-  raw="${raw//$'\n'/$'\x1f'}"
-  raw="${raw//&&/$'\x1f'}"
-  raw="${raw//||/$'\x1f'}"
-  raw="${raw//;/$'\x1f'}"
-  raw="${raw//|/$'\x1f'}"
-  printf '%s' "$raw"
-}
-
-# Strip leading whitespace, subshell `(`, env-var assignments, and any chain
-# of `cd <path>` from a single segment. cd-into the path each time. After
-# returning, $clean holds the cleaned segment.
+# Both the orphan check and working-tree-clean check need the hook's CWD to
+# match the repo the user is operating on. Walk the start of $command,
+# consuming each `cd <path> <terminator>` and `KEY=val` prefix in turn,
+# chdir-ing into each path. Stop once the leading content isn't a `cd` or
+# env assignment. The remainder is what gets scanned for `git` tokens.
 #
-# Bash 3.2 has no "return string from function" mechanism so we set a global.
-clean_segment() {
+# We deliberately don't try to handle `cd` mid-command (inside bash -c, $(),
+# etc.) — only the leading chain.
+
+apply_leading_prefixes() {
   local s="$1"
   local prev=""
-  # Loop until nothing more strips off; lets multiple prefixes (env + paren +
-  # cd, in any order) compose. We also handle `cd a && cd b` *within* a single
-  # segment in the unlikely case the splitter left them together (it won't,
-  # since && is itself a segment boundary — but be defensive).
   while [[ "$s" != "$prev" ]]; do
     prev="$s"
     # Trim leading whitespace.
     s="${s#"${s%%[![:space:]]*}"}"
-    # Strip leading subshell parens (one or more).
-    while [[ "$s" == "("* ]]; do
-      s="${s#(}"
-      s="${s#"${s%%[![:space:]]*}"}"
-    done
-    # Strip leading env-var assignments: KEY=val (no whitespace in val).
-    # Repeat until none match.
-    while [[ "$s" =~ ^([A-Za-z_][A-Za-z0-9_]*)=([^[:space:]]*)[[:space:]]+(.*)$ ]]; do
+    # Strip a leading env-var assignment: KEY=val (no whitespace in val).
+    if [[ "$s" =~ ^([A-Za-z_][A-Za-z0-9_]*)=([^[:space:]]*)[[:space:]]+(.*)$ ]]; then
       s="${BASH_REMATCH[3]}"
-    done
-    # Strip leading `cd <path>` and chdir into it. Path may be quoted; for
-    # simplicity accept any non-whitespace run.
+      continue
+    fi
+    # Strip a leading `cd <path>` and chdir into it. Path may be quoted; for
+    # simplicity accept any non-whitespace run. Terminator can be `;`,
+    # `&&`, `||`, `|`, `&`, newline, or just whitespace (`cd a cd b` is not
+    # a thing in shell — terminator chars are what shells use).
     if [[ "$s" =~ ^cd[[:space:]]+([^[:space:]]+)[[:space:]]*(.*)$ ]]; then
-      cd "${BASH_REMATCH[1]}" 2>/dev/null || true
-      s="${BASH_REMATCH[2]}"
+      local path="${BASH_REMATCH[1]}"
+      local rem="${BASH_REMATCH[2]}"
+      # Strip a leading chain operator from $rem so the next iteration sees
+      # clean text. Recognized terminators: `;`, `&&`, `||`, `|`, `&`,
+      # newline. Whitespace-only terminator is fine too.
+      rem="${rem#"${rem%%[![:space:]]*}"}"
+      while :; do
+        case "$rem" in
+          '&&'*) rem="${rem#&&}" ;;
+          '||'*) rem="${rem#||}" ;;
+          ';'*)  rem="${rem#;}" ;;
+          '|'*)  rem="${rem#|}" ;;
+          '&'*)  rem="${rem#&}" ;;
+          $'\n'*) rem="${rem#$'\n'}" ;;
+          *) break ;;
+        esac
+        rem="${rem#"${rem%%[![:space:]]*}"}"
+      done
+      cd "$path" 2>/dev/null || true
+      s="$rem"
+      continue
     fi
   done
-  clean="$s"
+  # Set global return.
+  remainder="$s"
 }
 
-# After cleaning, decide if this segment is a git invocation. Returns 0 (yes)
-# and sets $git_args to the part *after* `git` (with global options stripped).
-# Returns 1 (no) if this segment isn't a git command.
-is_git_invocation() {
-  local s="$1"
-  local cmd0 rest
+# ---------- find-`git` matcher ---------------------------------------------
+#
+# Linear scan: for each position where the literal three-character sequence
+# `git` appears, check word-boundary conditions on the chars immediately
+# before and after. If satisfied, extract from there to the next chain op
+# (`;`, `&&`, `||`, `|`, `&`, `\n`) or end-of-string and yield the args
+# slice (everything after the `git` token itself).
 
-  # Take the first token.
-  cmd0="${s%%[[:space:]]*}"
-  if [[ "$s" == *[[:space:]]* ]]; then
-    rest="${s#*[[:space:]]}"
-  else
-    rest=""
-  fi
+# Boundary chars BEFORE the `git` token: chars that can immediately precede
+# a command name in shell. start-of-string is handled by index==0.
+is_pre_boundary() {
+  local c="$1"
+  case "$c" in
+    ' '|$'\t'|$'\n'|';'|'&'|'|'|'('|'{'|'['|'<'|"'"|'"'|'$'|'='|','|'/') return 0 ;;
+  esac
+  return 1
+}
 
-  # Match `git` exactly OR a path ending in `/git`.
-  if [[ "$cmd0" == "git" ]] || [[ "$cmd0" == */git ]]; then
-    :
-  else
-    return 1
-  fi
+# Boundary chars AFTER the `git` token: chars that can terminate a command
+# name. end-of-string is handled at the call site.
+is_post_boundary() {
+  local c="$1"
+  case "$c" in
+    ' '|$'\t'|$'\n'|';'|'&'|'|'|')'|'}'|']'|'>'|"'"|'"') return 0 ;;
+  esac
+  return 1
+}
 
-  # Strip git global options: `-C <dir>`, `-c <k=v>`, `--git-dir=<path>`,
-  # `--work-tree=<path>`, `--namespace=<n>`, `--bare`, `--no-pager`,
-  # `--exec-path[=<path>]`, `--literal-pathspecs`, `--no-replace-objects`.
+# Strip git's global options from a string. After return, $git_args holds
+# everything from the first non-global-option token onward (i.e. starting
+# with the subcommand).
+strip_git_globals() {
+  local rest="$1"
   rest="${rest#"${rest%%[![:space:]]*}"}"
   while [[ -n "$rest" ]]; do
     local tok rem
@@ -135,16 +146,12 @@ is_git_invocation() {
           rest=""
           break
         fi
-        local val
-        val="${rem%%[[:space:]]*}"
         if [[ "$rem" == *[[:space:]]* ]]; then
           rest="${rem#*[[:space:]]}"
           rest="${rest#"${rest%%[![:space:]]*}"}"
         else
           rest=""
         fi
-        # val itself is discarded; we just needed to consume it.
-        : "$val"
         ;;
       --git-dir=*|--work-tree=*|--namespace=*|--exec-path|--exec-path=*|\
       --bare|--no-pager|--literal-pathspecs|--no-replace-objects)
@@ -155,16 +162,153 @@ is_git_invocation() {
         ;;
     esac
   done
-
   git_args="$rest"
-  return 0
+}
+
+# Extract the args slice starting at $1 (a string that begins immediately
+# after a matched `git` token) up to the next chain operator or EOS. Result
+# stored in $slice.
+extract_slice() {
+  local s="$1"
+  local i=0 n=${#s}
+  while (( i < n )); do
+    local c="${s:i:1}"
+    case "$c" in
+      $'\n'|';')
+        slice="${s:0:i}"
+        return 0
+        ;;
+      '&'|'|')
+        # Both `&&` and lone `&` are terminators; same for `||` and `|`.
+        slice="${s:0:i}"
+        return 0
+        ;;
+    esac
+    i=$(( i + 1 ))
+  done
+  slice="$s"
+}
+
+# Walk $remainder and dispatch each found git invocation to its gate.
+# Returns nothing — gate functions exit 2 on block.
+scan_for_git_tokens() {
+  local s="$1"
+  local n=${#s}
+  local i=0
+  while (( i + 3 <= n )); do
+    if [[ "${s:i:3}" != "git" ]]; then
+      i=$(( i + 1 ))
+      continue
+    fi
+    # Check pre-boundary.
+    if (( i > 0 )); then
+      local prev="${s:i-1:1}"
+      if ! is_pre_boundary "$prev"; then
+        i=$(( i + 1 ))
+        continue
+      fi
+    fi
+    # Check post-boundary.
+    if (( i + 3 < n )); then
+      local next="${s:i+3:1}"
+      if ! is_post_boundary "$next"; then
+        i=$(( i + 1 ))
+        continue
+      fi
+    fi
+    # Match! Extract slice starting just after `git`.
+    local after_git="${s:i+3}"
+    # Drop the leading whitespace that follows `git ` so strip_git_globals
+    # sees args directly. If the next char is a quote / paren / brace etc.,
+    # that's not a real arg list — but extract_slice handles bare `git`.
+    slice=""
+    extract_slice "$after_git"
+    local args="$slice"
+    # Trim leading whitespace from args.
+    args="${args#"${args%%[![:space:]]*}"}"
+    # Trim a leading close-quote/paren/brace if any (post-boundary char that
+    # got included by extract_slice up to chain op).
+    case "$args" in
+      \)*|\}*|\]*|\>*|\'*|\"*)
+        args="${args:1}"
+        args="${args#"${args%%[![:space:]]*}"}"
+        ;;
+    esac
+
+    # Trim trailing close-quote/paren/brace/bracket so the last arg isn't
+    # corrupted by the wrapper char (e.g. `git push --force"` → `git push --force`).
+    # Strip until no more recognized closers remain at the end.
+    local trimmed=1
+    while (( trimmed )); do
+      trimmed=0
+      case "$args" in
+        *\)|*\}|*\]|*\>|*\'|*\")
+          args="${args%?}"
+          # Also drop any trailing whitespace exposed.
+          args="${args%"${args##*[![:space:]]}"}"
+          trimmed=1
+          ;;
+      esac
+    done
+
+    git_args=""
+    strip_git_globals "$args"
+    dispatch_git "$git_args"
+
+    # Advance past this `git` token + the slice we consumed.
+    i=$(( i + 3 + ${#slice} ))
+    if (( i < n )); then
+      # Skip the chain-op char itself.
+      local op="${s:i:1}"
+      case "$op" in
+        '&'|'|') i=$(( i + 1 ))
+                 # Maybe `&&` or `||` — skip the second char too.
+                 if (( i < n )); then
+                   local op2="${s:i:1}"
+                   [[ "$op2" == "$op" ]] && i=$(( i + 1 ))
+                 fi
+                 ;;
+        *) i=$(( i + 1 )) ;;
+      esac
+    fi
+  done
+}
+
+# Dispatch: given $1 = args starting with subcommand, route to gate.
+dispatch_git() {
+  local ga="$1"
+  ga="${ga#"${ga%%[![:space:]]*}"}"
+  local sub rest
+  sub="${ga%%[[:space:]]*}"
+  if [[ "$ga" == *[[:space:]]* ]]; then
+    rest="${ga#*[[:space:]]}"
+  else
+    rest=""
+  fi
+
+  case "$sub" in
+    filter-branch|filter-repo|push|reset)
+      # Only gate within a git repo (after any leading cd we followed).
+      git rev-parse --git-dir >/dev/null 2>&1 || return 0
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  case "$sub" in
+    filter-branch)  check_filter_branch ;;
+    filter-repo)    check_filter_repo "$rest" ;;
+    push)           check_push "$rest" ;;
+    reset)          check_reset "$rest" ;;
+  esac
 }
 
 # ---------- per-subcommand gates -------------------------------------------
 #
 # Each gate takes the args *after* `git <subcommand>` (i.e. the part starting
 # with subcommand-specific flags and positional args). They re-use a single
-# helper `has_flag` operating on a space-padded version of the args.
+# helper `has_flag_in` operating on a space-padded version of the args.
 
 has_flag_in() {
   # has_flag_in <padded-args> <flag>
@@ -175,13 +319,6 @@ has_flag_in() {
 # Build a $padded string (" subcmd <args> ") for has_flag_in.
 make_padded() {
   padded=" ${1} "
-}
-
-starts_with_subcmd() {
-  # starts_with_subcmd <git_args> <subcmd>
-  local args="$1" sub="$2"
-  args="${args#"${args%%[![:space:]]*}"}"
-  [[ "$args" == "$sub" ]] || [[ "$args" == "$sub "* ]] || [[ "$args" == "$sub"$'\t'* ]]
 }
 
 check_filter_branch() {
@@ -410,44 +547,8 @@ Create a sibling backup ref first so they stay reachable:
 
 # ---------- main driver ----------------------------------------------------
 
-split=$(split_segments "$command")
-
-# Iterate segments. bash 3.2: read can't take a here-string with NUL, so we
-# substitute the unit separator with newlines and use a simple while-read.
-IFS=$'\x1f'
-# shellcheck disable=SC2206
-segments=( $split )
-unset IFS
-
-for seg in "${segments[@]}"; do
-  clean=""
-  clean_segment "$seg"
-  [[ -z "$clean" ]] && continue
-
-  git_args=""
-  if ! is_git_invocation "$clean"; then
-    continue
-  fi
-
-  # Only gate within a git repo (after any cd we followed).
-  git rev-parse --git-dir >/dev/null 2>&1 || continue
-
-  # First token of git_args is the subcommand.
-  ga="${git_args#"${git_args%%[![:space:]]*}"}"
-  sub="${ga%%[[:space:]]*}"
-  if [[ "$ga" == *[[:space:]]* ]]; then
-    rest="${ga#*[[:space:]]}"
-  else
-    rest=""
-  fi
-
-  case "$sub" in
-    filter-branch)  check_filter_branch ;;
-    filter-repo)    check_filter_repo "$rest" ;;
-    push)           check_push "$rest" ;;
-    reset)          check_reset "$rest" ;;
-    *)              : ;;  # not in scope
-  esac
-done
+remainder=""
+apply_leading_prefixes "$command"
+scan_for_git_tokens "$remainder"
 
 exit 0

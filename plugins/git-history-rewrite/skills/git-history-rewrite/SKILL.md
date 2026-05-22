@@ -21,9 +21,18 @@ The hook is a bash script and requires `jq` on `PATH` at hook-fire time to parse
 
 ## Scope of the hook
 
-The hook is a guard against typical LLM-emitted command idioms, not an adversarial sandbox. It splits the command on `;`, `&&`, `||`, `|`, and newlines, follows leading `cd <path>`, strips subshell `(`, env-var assignments, and git's known global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`, `--no-pager`, etc.), and matches both `git` and absolute / path-suffixed forms like `/usr/bin/git`.
+The hook is a guard against typical LLM-emitted command idioms, not an adversarial sandbox. It scans the command string for every `git` token at a word boundary, follows leading `cd <path>` (and `KEY=val` env-var) prefixes to land in the right repo, strips git's known global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`, `--no-pager`, etc.), and dispatches each found invocation to a per-subcommand gate. It matches both bare `git` and absolute / path-suffixed forms like `/usr/bin/git`.
 
-Known limitation: the hook does not parse `bash -c '<wrapped>'` or other shell-payload-in-argument forms. A model that wants to bypass it specifically can still do so by wrapping the command. The hook's value is catching the unsafe forms an LLM agent would emit by default, not adversarial evasion.
+Because the matcher finds `git` tokens anywhere in the command, the hook now also catches invocations that previously slipped through wrappers: inside `bash -c "..."`, `sh -c '...'`, `eval "..."`, `$(...)`, `<(...)`, in-line heredocs, function bodies (`f() { git push --force; }; f`), and lone-`&` chains. Aliases are not resolved (Claude Code's non-interactive shells don't apply user aliases anyway).
+
+Trade-off — intentional over-blocking: a literal `git push --force ...` (or other dangerous form) appearing as data inside a quoted string also blocks. If you need to print such a string, rephrase or split it:
+
+```bash
+echo "Use git push with --force-with-lease"   # safe (no `git push --force` substring)
+echo 'git push'; echo '  --force...'          # split across statements
+```
+
+Known limitation: the hook scans the command Claude is about to run, not files it references. `bash /path/to/script.sh` will not be inspected — if the script itself contains dangerous commands, the hook on the outer `bash` invocation doesn't see them. A model that wants to bypass the hook specifically can still do so by hiding the command in a file or by emitting it through indirection the hook can't statically resolve.
 
 ## What the hook enforces
 
