@@ -3,6 +3,11 @@
 A [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin marketplace
 by glebmish.
 
+## Requirements
+
+- Claude Code with plugin support.
+- `jq` on `PATH` — the `git-history-rewrite` plugin's PreToolUse hook parses tool-input JSON with it. macOS: `brew install jq`. Debian/Ubuntu: `apt install jq`.
+
 ## Install
 
 Add this marketplace to Claude Code:

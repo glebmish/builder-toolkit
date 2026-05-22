@@ -15,11 +15,21 @@ hooks:
 
 The skill's purpose is not to discourage git history override operations — sometimes they are exactly the right tool — but to ensure each is done in a form that preserves recovery surface. Each in-scope operation has a known failure mode that makes the rewrite irrecoverable; each also has a correct form that prevents that failure mode. The bundled hook fires on the matching commands and blocks them when the correct form is missing, with a block message that names the missing gate and shows the corrected form. This body covers the reasoning behind each gate and the discipline items the hook cannot verify mechanically.
 
+## Requirements
+
+The hook is a bash script and requires `jq` on `PATH` at hook-fire time to parse the tool-input JSON. On macOS: `brew install jq`. On Debian/Ubuntu: `apt install jq`. If `jq` is missing the hook exits 1 with a clear error and the command proceeds (the harness treats hook errors as non-blocking) — install `jq` or remove the plugin if you don't want the hook running.
+
+## Scope of the hook
+
+The hook is a guard against typical LLM-emitted command idioms, not an adversarial sandbox. It splits the command on `;`, `&&`, `||`, `|`, and newlines, follows leading `cd <path>`, strips subshell `(`, env-var assignments, and git's known global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`, `--no-pager`, etc.), and matches both `git` and absolute / path-suffixed forms like `/usr/bin/git`.
+
+Known limitation: the hook does not parse `bash -c '<wrapped>'` or other shell-payload-in-argument forms. A model that wants to bypass it specifically can still do so by wrapping the command. The hook's value is catching the unsafe forms an LLM agent would emit by default, not adversarial evasion.
+
 ## What the hook enforces
 
 - **History rewrites stay scoped to one named ref.** Other refs (sibling branches, tags, remote-tracking refs, ad-hoc backup refs) survive the operation untouched and serve as recovery points. `git filter-branch` is blocked outright — it predates safe scoping and git's own documentation now redirects to `filter-repo`. `git filter-repo` is allowed only with `--refs <ref>`.
 - **One transformation per rewrite pass.** Path strips, message edits, commit drops, content replacements, and mailmap remaps each have their own behavior; combined in one filter-repo invocation they interact in ways that are not obvious from the manual. They run as separate passes with a verification step between each.
-- **The working tree is clean before the rewrite begins.** Rewrites align the working tree to the new HEAD; uncommitted work is overwritten without warning.
+- **Tracked files in the working tree are clean before the rewrite begins.** Rewrites align the working tree to the new HEAD; uncommitted work to tracked files is overwritten without warning. Untracked files are left alone and don't block the operation.
 - **Force pushes assume both a known remote state and a known local state.** `--force-with-lease --force-if-includes` is the only form allowed: the lease catches stale-remote clobbers, and the includes check catches stale-local clobbers where a recent fetch silently made the lease tautological.
 - **Hard resets never silently orphan commits.** A `git reset --hard` whose target would leave commits unreachable from any other ref is blocked. The block message names the orphan candidates and points to the backup-ref discipline below.
 

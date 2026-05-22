@@ -23,11 +23,22 @@ PASS=0
 FAIL=0
 FAILED_CASES=()
 
+# Collect every temp dir created by mk_repo so we can clean them up on exit.
+TMP_DIRS=()
+cleanup_tmp_dirs() {
+  local d
+  for d in "${TMP_DIRS[@]:-}"; do
+    [[ -n "$d" && -d "$d" ]] && rm -rf "$d"
+  done
+}
+trap cleanup_tmp_dirs EXIT
+
 mk_repo() {
   # Create an empty, clean git repo in a fresh temp dir and cd into it.
   # Echoes the repo path on stdout.
   local d
   d=$(mktemp -d)
+  TMP_DIRS+=("$d")
   cd "$d"
   git init -q -b main
   git config user.email "test@test"
@@ -81,10 +92,10 @@ mk_repo >/dev/null
 run_case "scoped + single kind + clean tree" \
   "git filter-repo --refs main --path foo" 0
 
-# Dirty tree should block.
+# Dirty tracked file should block. (Untracked files are tested separately below.)
 mk_repo >/dev/null
-echo dirty > dirty_file
-run_case "scoped + single kind + dirty tree" \
+echo dirty >> seed
+run_case "scoped + single kind + dirty tracked file" \
   "git filter-repo --refs main --path foo" 2 "Working tree must be clean"
 
 # Multi-kind: path + replace-text → two kinds.
@@ -102,6 +113,30 @@ mk_repo >/dev/null
 run_case "scoped + commit-callback (single kind)" \
   "git filter-repo --refs main --commit-callback x" 0
 
+# --analyze does not rewrite history; should never be blocked for missing --refs.
+mk_repo >/dev/null
+run_case "filter-repo --analyze (read-only)" \
+  "git filter-repo --analyze" 0
+
+mk_repo >/dev/null
+run_case "filter-repo --analyze with extra args" \
+  "git filter-repo --analyze --target /tmp/out" 0
+
+# --analyze on a dirty tree is also fine — it doesn't touch the tree.
+mk_repo >/dev/null
+echo dirty > tracked_dirty
+git add tracked_dirty
+git commit -q -m "tracked"
+echo modified >> tracked_dirty
+run_case "filter-repo --analyze on dirty tree" \
+  "git filter-repo --analyze" 0
+
+# Untracked files alone should NOT block filter-repo.
+mk_repo >/dev/null
+echo unt > untracked_only
+run_case "filter-repo with untracked file only (tracked clean)" \
+  "git filter-repo --refs main --path foo" 0
+
 # -- Section 3: push --force family ------------------------------------------
 echo "=== push --force family ==="
 mk_repo >/dev/null
@@ -116,7 +151,7 @@ run_case "lease with =ref:sha + no includes" \
 run_case "lease + includes" \
   "git push --force-with-lease --force-if-includes origin main" 0
 run_case "force + includes (no lease keyword)" \
-  "git push --force --force-if-includes origin main" 0
+  "git push --force --force-if-includes origin main" 2 "force-with-lease"
 run_case "plain push (no force)" \
   "git push origin main" 0
 
@@ -168,6 +203,36 @@ git update-ref refs/remotes/origin/saved HEAD  # simulate fetched remote ref
 run_case "reset --hard <B> remote-tracking covers C" \
   "git reset --hard $B" 0
 
+# `reset --hard -- <pathspec>` → "--" means target defaults to HEAD, no orphans.
+mk_repo >/dev/null
+echo p > somefile; git add somefile; git commit -q -m "P"
+run_case "reset --hard -- pathspec (target defaults to HEAD)" \
+  "git reset --hard -- somefile" 0
+
+# Untracked files in working tree must NOT block reset --hard <non-HEAD>.
+mk_repo >/dev/null
+echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
+echo c > c; git add c; git commit -q -m "C"
+git branch sibling   # sibling at C protects orphans
+echo unt > untracked_only
+run_case "reset --hard <B> with untracked file only (sibling protects)" \
+  "git reset --hard $B" 0
+
+# Unrecognized reset flag must be a parse failure (block, ask for explicit invocation).
+mk_repo >/dev/null
+run_case "reset --hard with unknown flag" \
+  "git reset --hard --bogus-flag HEAD" 2 "explicit"
+
+# Reset --hard <non-HEAD> with uncommitted tracked changes must block, and the
+# block message must say "tracked files".
+mk_repo >/dev/null
+echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
+echo c > c; git add c; git commit -q -m "C"
+git branch sibling   # protects orphans so the working-tree check is the one we hit
+echo modified >> seed   # modify a tracked file
+run_case "reset --hard <B> with dirty tracked file" \
+  "git reset --hard $B" 2 "tracked files"
+
 # -- Section 5: out-of-scope and edge cases ----------------------------------
 echo "=== out-of-scope and edge cases ==="
 mk_repo >/dev/null
@@ -180,6 +245,117 @@ run_case "git status (not in matcher)" \
 # If the path isn't a git repo, the hook exits 0 (bails out).
 run_case "cd into /tmp + git push (not a repo there)" \
   "cd /tmp && git push origin main" 0
+
+# -- Section 6: bypass matrix -------------------------------------------------
+echo "=== bypass matrix (Critical 1) ==="
+
+# Chaining operators — each segment must be inspected independently.
+mk_repo >/dev/null
+run_case "chain && — git status && git push --force" \
+  "git status && git push --force origin main" 2 "force-with-lease"
+run_case "chain ; — git status ; git push --force" \
+  "git status ; git push --force origin main" 2 "force-with-lease"
+run_case "chain || — git status || git push --force" \
+  "git status || git push --force origin main" 2 "force-with-lease"
+run_case "chain | — true | git push --force" \
+  "true | git push --force origin main" 2 "force-with-lease"
+run_case "chain newline — git status<NL>git push --force" \
+  "$(printf 'git status\ngit push --force origin main')" 2 "force-with-lease"
+
+# Subshell wrapper.
+run_case "subshell — (git push --force origin main)" \
+  "(git push --force origin main)" 2 "force-with-lease"
+
+# Leading env-var assignments.
+run_case "env var prefix — GIT_DIR=.git git filter-branch ..." \
+  "GIT_DIR=.git git filter-branch --tree-filter true HEAD" 2 "deprecated upstream"
+run_case "two env var prefixes — A=1 B=2 git push --force" \
+  "A=1 B=2 git push --force origin main" 2 "force-with-lease"
+
+# git global options between `git` and the subcommand.
+mk_repo >/dev/null
+run_case "git -C . reset --hard <sha> orphans" \
+  "git -C . reset --hard $(git rev-parse HEAD)" 0  # HEAD ~ current → exit 0 anyway
+mk_repo >/dev/null
+echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
+echo c > c; git add c; git commit -q -m "C"
+run_case "git -C . reset --hard <B> no sibling (orphans)" \
+  "git -C . reset --hard $B" 2 "unreachable from any ref"
+
+mk_repo >/dev/null
+echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
+echo c > c; git add c; git commit -q -m "C"
+run_case "git -c user.email=x reset --hard <B> orphans" \
+  "git -c user.email=x reset --hard $B" 2 "unreachable from any ref"
+
+mk_repo >/dev/null
+echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
+echo c > c; git add c; git commit -q -m "C"
+run_case "git --no-pager reset --hard <B> orphans" \
+  "git --no-pager reset --hard $B" 2 "unreachable from any ref"
+
+mk_repo >/dev/null
+run_case "git --no-pager filter-branch ..." \
+  "git --no-pager filter-branch --tree-filter true HEAD" 2 "deprecated upstream"
+
+# Absolute / path-suffixed git binary.
+mk_repo >/dev/null
+run_case "absolute /usr/bin/git filter-branch" \
+  "/usr/bin/git filter-branch --tree-filter true HEAD" 2 "deprecated upstream"
+run_case "absolute /opt/homebrew/bin/git push --force" \
+  "/opt/homebrew/bin/git push --force origin main" 2 "force-with-lease"
+
+# `cd <path> ;` (semicolon, not &&) — should follow cd and then gate.
+mk_repo >/dev/null
+REPO_FOR_CD=$(pwd)
+mk_repo >/dev/null
+echo b > b; git add b; git commit -q -m "B"; B=$(git rev-parse HEAD)
+echo c > c; git add c; git commit -q -m "C"
+REPO_WITH_ORPHANS=$(pwd)
+run_case "cd <repo>; git reset --hard <B> orphans" \
+  "cd $REPO_WITH_ORPHANS ; git reset --hard $B" 2 "unreachable from any ref"
+
+# cd then newline.
+run_case "cd <repo><NL>git reset --hard <B> orphans" \
+  "$(printf 'cd %s\ngit reset --hard %s' "$REPO_WITH_ORPHANS" "$B")" 2 "unreachable from any ref"
+
+# cd a && cd b && git ... should land in the FINAL directory.
+mk_repo >/dev/null
+INTERMEDIATE=$(pwd)
+run_case "cd <intermediate> && cd <repo-with-orphans> && git reset --hard <B>" \
+  "cd $INTERMEDIATE && cd $REPO_WITH_ORPHANS && git reset --hard $B" 2 "unreachable from any ref"
+
+# Bypass attempt: env var prefix on a force push should still trip the lease gate.
+run_case "env var prefix on push --force" \
+  "FOO=bar git push --force origin main" 2 "force-with-lease"
+
+# -- Section 7: jq-missing error path ----------------------------------------
+echo "=== jq-missing error path ==="
+
+# Run the hook with a PATH that has bash + standard tools but no jq.
+# Expect exit 1 and the explicit error message.
+mk_repo >/dev/null
+NOJQ_DIR=$(mktemp -d)
+TMP_DIRS+=("$NOJQ_DIR")
+for b in bash sh cat git env printf; do
+  src=$(command -v "$b") || continue
+  ln -sf "$src" "$NOJQ_DIR/$b"
+done
+# Make sure jq is NOT in the sandbox.
+rm -f "$NOJQ_DIR/jq"
+
+label="hook errors clearly when jq missing"
+input=$(printf '{"tool_input":{"command":"git status"}}')
+err=$(printf '%s' "$input" | PATH="$NOJQ_DIR" "$HOOK" 2>&1 >/dev/null)
+rc=$?
+if [[ "$rc" == "1" ]] && [[ "$err" == *"requires \`jq\`"* ]]; then
+  printf '  PASS  %s\n' "$label"
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL  %s — exit %s, stderr: %s\n' "$label" "$rc" "${err:0:200}"
+  FAIL=$((FAIL + 1))
+  FAILED_CASES+=("$label")
+fi
 
 # -- Summary ------------------------------------------------------------------
 echo
