@@ -1,0 +1,28 @@
+# Env files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# OS metadata
+.DS_Store
+.AppleDouble
+._*
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code per-user state
+.claude/settings.local.json
+
+# Node (in case a plugin ever adds tooling)
+node_modules/
