@@ -1,50 +1,57 @@
 # builder-toolkit
 
-A [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin marketplace
-of guardrails and discipline aids for agentic coding — currently one plugin
-(`git-history-rewrite`) that blocks unsafe forms of destructive git commands
-before they run.
+[![CI](https://github.com/glebmish/builder-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/glebmish/builder-toolkit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/glebmish/builder-toolkit)](https://github.com/glebmish/builder-toolkit/releases)
+[![License: MIT](https://img.shields.io/github/license/glebmish/builder-toolkit)](LICENSE)
 
-Status: early. One plugin, single maintainer, `0.x` line.
+A collection of skills and plugins loosely related to building projects.
 
-## Requirements
-
-- Claude Code with plugin support.
-- `jq` on `PATH` — the `git-history-rewrite` plugin's PreToolUse hook parses tool-input JSON with it. macOS: `brew install jq`. Debian/Ubuntu: `apt install jq`.
-
-## Install
-
-Add this marketplace to Claude Code:
+Each entry below ships as a Claude Code plugin (via this marketplace) and
+as a standalone skill installable with [`npx skills`](https://github.com/vercel-labs/skills).
+Bundled hooks (where present) are only registered on the plugin-install
+path; the skill-only install gives you the SKILL.md without hook
+enforcement.
 
 ```
-/plugin marketplace add glebmish/builder-toolkit
-```
-
-Then browse and install plugins:
-
-```
-/plugin
+claude plugin marketplace add glebmish/builder-toolkit
+npx skills add glebmish/builder-toolkit
 ```
 
 ## Plugins
 
-| Plugin | Description |
-|--------|-------------|
-| [`git-history-rewrite`](plugins/git-history-rewrite) | Safety net for destructive git operations — bundles a `PreToolUse` hook that blocks unsafe forms of `git filter-repo`, the `git push --force` family, and non-HEAD `git reset --hard`. The skill body covers the discipline items (sibling backup ref, off-repo bundle, post-rewrite verification) the hook can't enforce mechanically. |
+### git-history-rewrite
 
-## Scope and limitations
+Safety net for destructive git operations — bundles a `PreToolUse` hook that
+blocks unsafe forms of `git` history rewrite commands and steers toward creating
+backups before running those commands.
 
-The hook is a guard against typical LLM-emitted command idioms, not an
-adversarial sandbox: it inspects the command Claude is about to run, not files
-that command references, and intentionally over-blocks rather than try to
-parse arbitrary shell. See [`SKILL.md` → Scope of the hook](plugins/git-history-rewrite/skills/git-history-rewrite/SKILL.md#scope-of-the-hook)
-for the full set of edges (wrapper handling, the literal-string trade-off,
-script-indirection gap).
+![Hook blocking `git filter-repo` without `--refs`, with the agent explaining why the block protects the recovery net](plugins/git-history-rewrite/docs/images/hook-block.png)
+
+[Full details →](plugins/git-history-rewrite/README.md)
+
+**Install**
+
+As a Claude Code plugin (recommended — enables the hook):
+
+```
+claude plugin marketplace add glebmish/builder-toolkit
+claude plugin install git-history-rewrite@builder-toolkit
+```
+
+As a standalone skill (skill body only, no hook):
+
+```
+npx skills add glebmish/builder-toolkit --skill git-history-rewrite
+```
+
+**Prerequisites**
+
+`jq` on `PATH` — the PreToolUse hook parses tool-input JSON with it. Only
+required for the plugin install path.
 
 ## Releases
 
-Versioned releases with auto-generated notes are published at
-[GitHub Releases](https://github.com/glebmish/builder-toolkit/releases).
+Versioned releases are published at [GitHub Releases](https://github.com/glebmish/builder-toolkit/releases).
 
 ## License
 

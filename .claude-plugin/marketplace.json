@@ -5,14 +5,14 @@
     "url": "https://github.com/glebmish"
   },
   "metadata": {
-    "description": "A Claude Code plugin marketplace by glebmish.",
+    "description": "Skills and plugins loosely related to building new projects.",
     "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "git-history-rewrite",
       "source": "./plugins/git-history-rewrite",
-      "description": "Safety net for destructive git operations: scopes `git filter-repo` to one ref, enforces `git push --force-with-lease --force-if-includes`, and orphan-checks `git reset --hard` to non-HEAD targets. Bundled PreToolUse hook blocks invocations missing required correct-form flags; the skill body covers the discipline items the hook can't enforce mechanically."
+      "description": "Safety net for destructive git operations — `git filter-repo`, `git push --force`, and `git reset --hard`."
     }
   ]
 }

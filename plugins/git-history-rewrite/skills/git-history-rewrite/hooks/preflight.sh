@@ -5,7 +5,7 @@
 #   0  — command allowed (or not in scope)
 #   1  — hook script error (harness lets the command proceed, logs the error)
 #
-# Design note: this hook is a guard against typical LLM idioms, not an
+# Design note: this hook is a guard against typical LLM behavior, not an
 # adversarial sandbox. It locates every `git` token in the raw command text
 # (including inside `bash -c`, `sh -c`, `eval`, `$(...)`, `<(...)`, heredocs,
 # and function bodies), strips git's known global options, and dispatches to

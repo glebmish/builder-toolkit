@@ -1,9 +1,9 @@
 {
   "name": "git-history-rewrite",
-  "description": "Safety net for destructive git operations — `git filter-repo`, the `git push --force` family, and `git reset --hard` to non-HEAD targets. The skill names the correct form for each; the bundled PreToolUse hook blocks invocations missing the required flags; the agent covers the discipline items (sibling backup ref, off-repo bundle, post-rewrite verification, smallest-tool selection) the hook cannot enforce mechanically.",
+  "description": "Safety net for destructive git operations — `git filter-repo`, `git push --force`, and `git reset --hard`.",
   "version": "0.1.0",
   "author": {
-    "name": "glebmish",
+    "name": "Gleb Mishchenko",
     "url": "https://github.com/glebmish"
   },
   "license": "MIT",
