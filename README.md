@@ -27,27 +27,8 @@ backups before running those commands.
 
 ![Hook blocking `git filter-repo` without `--refs`, with the agent explaining why the block protects the recovery net](plugins/git-history-rewrite/docs/images/hook-block.png)
 
-[Full details →](plugins/git-history-rewrite/README.md)
-
-**Install**
-
-As a Claude Code plugin (recommended — enables the hook):
-
-```
-claude plugin marketplace add glebmish/builder-toolkit
-claude plugin install git-history-rewrite@builder-toolkit
-```
-
-As a standalone skill (skill body only, no hook):
-
-```
-npx skills add glebmish/builder-toolkit --skill git-history-rewrite
-```
-
-**Prerequisites**
-
-`jq` on `PATH` — the PreToolUse hook parses tool-input JSON with it. Only
-required for the plugin install path.
+Install, prerequisites, and the full command reference are in the
+[plugin README →](plugins/git-history-rewrite/README.md).
 
 ### share-artifact
 
@@ -56,27 +37,8 @@ uploads it to Cloudinary and pastes back a link that works on mobile, a chat
 client, or any remote control where a local file path is useless. Scoped to
 images and GIFs; it does not produce or edit artifacts.
 
-[Full details →](plugins/share-artifact/README.md)
-
-**Install**
-
-As a Claude Code plugin:
-
-```
-claude plugin marketplace add glebmish/builder-toolkit
-claude plugin install share-artifact@builder-toolkit
-```
-
-As a standalone skill:
-
-```
-npx skills add glebmish/builder-toolkit --skill share-artifact
-```
-
-**Prerequisites**
-
-`cld` on `PATH` (`pipx install cloudinary-cli`) and a `CLOUDINARY_URL`
-exported for the target Cloudinary account.
+Install, prerequisites, and the privacy/cleanup model are in the
+[plugin README →](plugins/share-artifact/README.md).
 
 ## Releases
 
