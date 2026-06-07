@@ -49,6 +49,35 @@ npx skills add glebmish/builder-toolkit --skill git-history-rewrite
 `jq` on `PATH` — the PreToolUse hook parses tool-input JSON with it. Only
 required for the plugin install path.
 
+### share-artifact
+
+Share a finished image or GIF with the user as a viewable, signed URL —
+uploads it to Cloudinary and pastes back a link that works on mobile, a chat
+client, or any remote control where a local file path is useless. Scoped to
+images and GIFs; it does not produce or edit artifacts.
+
+[Full details →](plugins/share-artifact/README.md)
+
+**Install**
+
+As a Claude Code plugin:
+
+```
+claude plugin marketplace add glebmish/builder-toolkit
+claude plugin install share-artifact@builder-toolkit
+```
+
+As a standalone skill:
+
+```
+npx skills add glebmish/builder-toolkit --skill share-artifact
+```
+
+**Prerequisites**
+
+`cld` on `PATH` (`pipx install cloudinary-cli`) and a `CLOUDINARY_URL`
+exported for the target Cloudinary account.
+
 ## Releases
 
 Versioned releases are published at [GitHub Releases](https://github.com/glebmish/builder-toolkit/releases).

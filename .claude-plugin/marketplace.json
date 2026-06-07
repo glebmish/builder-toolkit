@@ -13,6 +13,11 @@
       "name": "git-history-rewrite",
       "source": "./plugins/git-history-rewrite",
       "description": "Safety net for destructive git operations — `git filter-repo`, `git push --force`, and `git reset --hard`."
+    },
+    {
+      "name": "share-artifact",
+      "source": "./plugins/share-artifact",
+      "description": "Share a finished image or GIF with the user as a viewable, signed URL — uploads it to Cloudinary and pastes back a link that works on mobile, chat, or any remote control where local file paths are useless. Scoped to images and GIFs; does not produce or edit artifacts."
     }
   ]
 }
