@@ -1,7 +1,7 @@
 {
   "name": "git-history-rewrite",
   "description": "Safety net for destructive git operations — `git filter-repo`, `git push --force`, and `git reset --hard`.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Gleb Mishchenko",
     "url": "https://github.com/glebmish"

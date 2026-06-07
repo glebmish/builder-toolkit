@@ -1,7 +1,7 @@
 {
   "name": "share-artifact",
   "description": "Share a finished image or GIF with the user as a viewable, signed URL: upload it to Cloudinary and paste a link that works on mobile, chat, or any remote control where local file paths are useless. Covers session-id-based naming, the authenticated-asset privacy model, and tag-based cleanup. Does not produce artifacts — hand it a PNG or GIF that already exists.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Gleb Mishchenko",
     "url": "https://github.com/glebmish"
