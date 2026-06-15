@@ -61,8 +61,12 @@ Tags on every upload: `<YYYY-MM-DD>,<SID_SHORT>,$SID,share-artifact`. Include bo
 
 ```bash
 FOLDER="$(date -u +%Y-%m-%d)-$SID_SHORT"
-COUNT=$(cld --verbosity ERROR admin resources type=authenticated prefix="$FOLDER/" max_results=500 2>/dev/null \
-        | jq -r '.resources | length')
+# A failed query must not look like an empty folder — otherwise NEXT resets to
+# 001 and the next upload silently overwrites the existing 001-* asset. Bail
+# instead of swallowing the error with 2>/dev/null.
+resources=$(cld --verbosity ERROR admin resources type=authenticated prefix="$FOLDER/" max_results=500) \
+        || { echo "counter query failed — refusing to assume the folder is empty" >&2; exit 1; }
+COUNT=$(printf '%s' "$resources" | jq -r '.resources | length')
 NEXT=$(printf '%03d' $((COUNT + 1)))
 ```
 
@@ -71,13 +75,27 @@ NEXT=$(printf '%03d' $((COUNT + 1)))
 ### The upload command
 
 ```bash
-LOCAL_PATH=<local-path>                 # the existing PNG/GIF on disk
-# Derive the slug through a sanitizer rather than hand-substituting it into the
-# command — this is what guarantees the [a-z0-9-] constraint and stops any shell
-# metacharacter in the description from reaching the shell.
-slug=$(printf '%s' "<short description of this shot>" \
-        | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' \
+# Capture the path and the free-text description through single-quoted heredocs
+# (<<'EOF') so the shell never parses their contents. THIS — not the tr/sed
+# pipeline below — is what keeps shell metacharacters (a quote, $(), ;, or an
+# apostrophe in "user's avatar") in either value from reaching the shell.
+# Inlining the text straight into the command (slug="<description>") would break
+# at parse time, before any sanitizer could run.
+LOCAL_PATH=$(cat <<'SHARE_ARTIFACT_EOF'
+<local-path>
+SHARE_ARTIFACT_EOF
+)
+desc=$(cat <<'SHARE_ARTIFACT_EOF'
+<short description of this shot>
+SHARE_ARTIFACT_EOF
+)
+# The delimiter is deliberately unusual: the heredoc ends at the first line that
+# equals it exactly, so the body must not contain a lone `SHARE_ARTIFACT_EOF`
+# line. Real paths and descriptions never do.
+# Now constrain the (already shell-safe) description to a [a-z0-9-] slug.
+slug=$(printf '%s' "$desc" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' \
         | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')
+slug=${slug:-shot}                      # all-punctuation/empty description → stable default
 
 URL=$(cld --verbosity ERROR uploader upload "$LOCAL_PATH" \
         public_id="$FOLDER/$NEXT-$slug" \
@@ -85,7 +103,12 @@ URL=$(cld --verbosity ERROR uploader upload "$LOCAL_PATH" \
         type=authenticated \
         tags="$(date -u +%Y-%m-%d),$SID_SHORT,$SID,share-artifact" \
       | jq -r '.secure_url')
-echo "$URL"
+# Only a real URL is safe to paste — once it's in chat, the claim is made. A
+# failed upload yields the literal "null" or an empty string; don't surface it.
+case "$URL" in
+  https://*) echo "$URL" ;;
+  *) echo "upload failed (got: ${URL:-empty})" >&2; exit 1 ;;
+esac
 ```
 
 Why two folder params:
@@ -123,8 +146,8 @@ cld admin delete_resources_by_tag share-artifact    # everything shared via this
 
 - **Forgetting `type=authenticated`** — uploads as public. Anyone who guesses the `public_id` can view. Always set `type=authenticated`.
 - **Reusing `public_id` across uploads** — replaces the previous asset. Always bump the counter.
-- **Spaces or odd chars in the slug** — pass the description through the sanitizer in Step 2 instead of hand-writing the slug into the command; it forces `[a-z0-9-]` and strips anything the shell could misread.
-- **`cld ping` failing** — `CLOUDINARY_URL` not exported or malformed. Confirm it's present with `[ -n "$CLOUDINARY_URL" ]`. Don't run `cld config` or echo `CLOUDINARY_URL` into chat — both print the API key and secret.
+- **Spaces or odd chars in the description** — capture it via the single-quoted heredoc in Step 2 and let the sanitizer derive the slug. The heredoc is what stops a quote, `$()`, `;`, or apostrophe in the description from reaching the shell; the sanitizer then forces `[a-z0-9-]`. Never inline the raw description into the command — it would break at parse time, before the sanitizer runs.
+- **`cld ping` failing** — `CLOUDINARY_URL` not exported or malformed. Confirm it's present with `[ -n "$CLOUDINARY_URL" ]`, which prints nothing. Never surface the value itself: avoid `echo "$CLOUDINARY_URL"`, `env`/`printenv`/`set` greps, `--verbosity DEBUG`, and `cld config` (it prints the cloud name and API key, masking only the secret). The key and cloud name are sensitive even with the secret masked.
 - **Free-plan quota** — 25 GB. Captures are tiny; `cld admin usage` shows current totals.
 - **Very tall PNGs** (hundreds of lines of scrollback rendered to one image) display awkwardly on mobile chat. Cap the artifact's height upstream, where it's produced.
 - **Uploading something other than an image or GIF** — out of scope. This skill assumes a viewable image; for other artifact types it has no opinion on naming or privacy.
