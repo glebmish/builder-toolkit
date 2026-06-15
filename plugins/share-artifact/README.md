@@ -45,6 +45,10 @@ without a signature, and the `secure_url` carries that signature in an
 `s--XXXX--` fragment. Treat the URL like a password for that one image —
 anyone with it can view until the asset is deleted.
 
+Because the URL doesn't expire, it stays live wherever the chat transcript
+ends up — logs, backups, sync. For anything sensitive, prune at the end of
+the conversation (see Cleanup) rather than leaving it reachable indefinitely.
+
 ## Cleanup
 
 Pruning is manual, by tag:
