@@ -63,12 +63,18 @@ jobs:
           shellcheck --version
 
       - name: Lint hook and tests
-        # -x follows sourced files; -P sets search path for those. Not strictly
-        # needed today (no `source` directives), but cheap to enable.
+        # -x follows sourced files. Discovered rather than listed, for the
+        # same drift reason as the manifest job below.
         run: |
-          shellcheck \
-            plugins/git-history-rewrite/skills/git-history-rewrite/hooks/preflight.sh \
-            plugins/git-history-rewrite/tests/git-history-rewrite/preflight.test.sh
+          set -eu
+          found=$(find plugins -name '*.sh' | sort)
+          if [ -z "$found" ]; then
+            echo "::error::no shell scripts found — has the layout changed?"
+            exit 1
+          fi
+          echo "$found"
+          # shellcheck disable=SC2086
+          shellcheck -x $found
 
   go-snippets:
     name: Go snippets (format + parse)
@@ -143,3 +149,30 @@ jobs:
             exit 1
           fi
           echo "validated $count manifests"
+
+      - name: marketplace.json lists exactly the plugins on disk
+        # The likelier drift is not malformed JSON, it is adding a plugin
+        # directory and forgetting to register it (or vice versa).
+        run: |
+          set -eu
+          listed=$(jq -r '.plugins[].source' .claude-plugin/marketplace.json | sed 's|^\./||' | sort)
+          onfs=$(find plugins -mindepth 1 -maxdepth 1 -type d | sort)
+          if ! diff <(echo "$listed") <(echo "$onfs"); then
+            echo "::error::marketplace.json plugins[] and plugins/ have drifted (< listed, > on disk)"
+            exit 1
+          fi
+          echo "marketplace.json matches plugins/ on disk"
+
+      - name: plugin.json name matches its directory
+        run: |
+          set -eu
+          fail=0
+          while IFS= read -r m; do
+            dir=$(basename "$(dirname "$(dirname "$m")")")
+            name=$(jq -r '.name' "$m")
+            if [ "$dir" != "$name" ]; then
+              echo "::error::$m declares name=$name but lives in plugins/$dir"
+              fail=1
+            fi
+          done < <(find plugins -path '*/.claude-plugin/plugin.json')
+          exit "$fail"
