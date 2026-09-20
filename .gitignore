@@ -21,8 +21,5 @@ Desktop.ini
 *.swo
 *~
 
-# Claude Code per-user state
-.claude/settings.local.json
-
 # Node (in case a plugin ever adds tooling)
 node_modules/

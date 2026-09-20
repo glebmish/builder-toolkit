@@ -1,32 +1,32 @@
 ---
-name: implement-cli
+name: agent-cli-implement
 description: Use when scaffolding or implementing an agent-first Go CLI from a completed design doc and an OpenAPI spec — produces the project layout, hand-written API client (Bearer/Basic), config cascade, embedded schema introspection with operation-mapping test, format/validate helpers, and the cobra command tree with offline-command skip and SilenceUsage. Don't use for non-Go ports.
 ---
 
-# implement-cli
+# agent-cli-implement
 
 ## Overview
 
-Implements the design produced by `design-cli` as a Go CLI built on Cobra + plain `net/http` + `gopkg.in/yaml.v3`. Intentionally minimal: **no codegen, no HTTP frameworks, no struct-binding libs**. All operations are thin wrappers over three shared helpers (`doGet`, `doMutate`, `doDelete`) that delegate to a hand-written client.
+Implements the design produced by `agent-cli-design` as a Go CLI built on Cobra + plain `net/http` + `gopkg.in/yaml.v3`. Intentionally minimal: **no codegen, no HTTP frameworks, no struct-binding libs**. All operations are thin wrappers over three shared helpers (`doGet`, `doMutate`, `doDelete`) that delegate to a hand-written client.
 
 **Code lives in `snippets/`**, not in this file. Each section below points to the file you should read and paste from. Swap `github.com/example/acme-cli` for your own module path when you copy.
 
 ## Prerequisites
 
-- A `docs/design.md` from `design-cli` containing: surface shape, auth scheme + flag/env/config naming, tenant param, envelope decision, pagination scheme, exit-code policy, error-hint table, sanitization strategy, skill list.
+- A `docs/design.md` from `agent-cli-design` containing: surface shape, auth scheme + flag/env/config naming, tenant param, envelope decision, pagination scheme, exit-code policy, error-hint table, sanitization strategy, skill list.
 - An OpenAPI spec file (`openapi.yaml` or `spec.json`) — see Step 0.
 - Go ≥ 1.22, `yq` on PATH.
 
 ## When to Use
 
 - Bootstrapping a fresh agent-first CLI in Go.
-- The design phase is complete (see `design-cli`).
+- The design phase is complete (see `agent-cli-design`).
 
 **Don't use for:** non-Go implementations; modifying an existing CLI of this shape (use it as a reference).
 
 ## Running example
 
-Examples below use the same fictional CLI as `design-cli`:
+Examples below use the same fictional CLI as `agent-cli-design`:
 
 | | Value |
 |---|---|
@@ -64,7 +64,7 @@ acme/
 ├── README.md                 # human quickstart
 ├── CLAUDE.md                 # architecture + add-operation recipe + build quirk
 ├── docs/
-│   └── design.md             # from design-cli
+│   └── design.md             # from agent-cli-design
 ├── openapi.yaml              # source spec (Step 0)
 └── internal/
     ├── api/
@@ -148,7 +148,7 @@ Responsibilities:
 - `DryRun(method, path, params, body) string` — formatted preview.
 - `WithContext(ctx, *Client)` / `FromContext(ctx) *Client` for cobra context plumbing.
 - `APIError` whose `Error()` returns `"API error <code> <text>: <method> <path>: <body>"` plus the per-status hint. `IsAuth()` returns true on 401/403.
-- `DoMultipart` if the API accepts uploads (see `design-cli` §14).
+- `DoMultipart` if the API accepts uploads (see `agent-cli-design` §14).
 
 Auth variants:
 
@@ -232,7 +232,7 @@ Two cobra settings that matter:
 
 `PersistentPreRunE` skips offline subcommands first — they must run without a token: `schema`, `skills`, `config`, `help`, `init`. The `skills` entry covers `skills list`, `skills get`, and `skills install` because `isOffline` walks the cobra parent chain. Then load → ApplyEnv → ApplyFlags → Validate → stash client on context.
 
-Persistent flags (standard set per `design-cli` §3): `--format`, `--fields`, `--dry-run`, `--yes`, `--access-token`, `--base-url`, `--account-id` (if tenant), `--json`, `--params`, plus pagination flags (only if API paginates): `--page-all`, `--page-limit`, `--page-delay`, `--page-size`.
+Persistent flags (standard set per `agent-cli-design` §3): `--format`, `--fields`, `--dry-run`, `--yes`, `--access-token`, `--base-url`, `--account-id` (if tenant), `--json`, `--params`, plus pagination flags (only if API paginates): `--page-all`, `--page-limit`, `--page-delay`, `--page-size`.
 
 `--json` and `--params` are root persistent — not per-command. Per-command `--json` declarations conflict with the inherited persistent flag and lose the canonical-payload framing.
 
@@ -282,7 +282,7 @@ The four workhorses (`doGet`, `doMutate`, `doDelete`, `doPaginate`) cover JSON G
 | Helper | When to add | Notes |
 |---|---|---|
 | `doDownload(cmd, path, params, outPath)` | API serves binary (charts, exports, attachments) | Streams `resp.Body` to `os.Stdout` or `--out <path>`. **Skip** `format.Write` (which JSON-parses). |
-| `doUpload(cmd, path, params, fieldName, paths)` | API accepts `multipart/form-data` (file imports, avatars) | Builds multipart, calls `c.DoMultipart`. Sandbox file paths to CWD per `design-cli` §14. |
+| `doUpload(cmd, path, params, fieldName, paths)` | API accepts `multipart/form-data` (file imports, avatars) | Builds multipart, calls `c.DoMultipart`. Sandbox file paths to CWD per `agent-cli-design` §14. |
 | `doPostDelete(cmd, path, jsonBody, resource, id)` | API uses POST-with-body for delete (e.g. `POST /trades/delete`) | `confirmDelete` + `doMutate("POST", …)`. |
 
 These are *expected*, not deviations. Each one earns its place by absorbing a pattern that would otherwise repeat across resource files. Don't pre-add them — wait for the second occurrence, then factor.
@@ -419,7 +419,7 @@ Validation-error hint must name `acme skills list` so the agent self-recovers.
 
 - `acme config init` — interactive prompt; preserves existing fields if file exists; writes via `config.Save` with `0600`.
 - `acme config path` — print the resolved config path.
-- `acme config show [--unmasked]` — print fields, mask token unless `--unmasked` (for headless export — see `design-cli` §15).
+- `acme config show [--unmasked]` — print fields, mask token unless `--unmasked` (for headless export — see `agent-cli-design` §15).
 
 `config init` must work with non-interactive stdin: detect `!isatty(os.Stdin)` and either fail with an actionable error pointing at the env var, or accept piped input. **Never** require a browser flow.
 

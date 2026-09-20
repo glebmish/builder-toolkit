@@ -1,12 +1,12 @@
 # `skills` command group — design
 
 **Date:** 2026-05-13
-**Scope:** `plugins/agent-cli` — both `design-cli` and `implement-cli` SKILL.md prescriptions.
+**Scope:** `plugins/agent-cli` — both `agent-cli-design` and `agent-cli-implement` SKILL.md prescriptions.
 **Status:** approved for plan.
 
 ## Problem
 
-The current `design-cli` / `implement-cli` skills prescribe a single
+The current `agent-cli-design` / `agent-cli-implement` skills prescribe a single
 `acme install-skills` command that copies an `embed.FS` of bundled skills to
 `~/.claude/skills` (or `./.claude/skills`). That works for users who run the
 install step, but a fresh agent invocation that has only the binary — no
@@ -115,7 +115,7 @@ required; single-file skills emit `files` with one entry.
 Frontmatter parse failures are discovery-class because they indicate the CLI
 binary itself is malformed; users cannot fix them.
 
-## Implementation impact (for `implement-cli`)
+## Implementation impact (for `agent-cli-implement`)
 
 - **Rename** `internal/cmd/install_skills.go` → `internal/cmd/skills.go`.
 - That file holds the `skills` parent cobra command plus three subcommands
@@ -140,7 +140,7 @@ Reference table update (§ "Quick reference"):
 | Skills | internal/cmd/skills/ + skills.go | embed.FS; list/get/install subcommands; runtime alt to disk install |
 ```
 
-## Doc-strategy impact (for `design-cli`)
+## Doc-strategy impact (for `agent-cli-design`)
 
 Minimal — preserve the existing front-door narrative.
 
@@ -176,5 +176,5 @@ agent front-door framing.
   the full envelope including frontmatter in file contents.
 - `acme skills install` matches the current `install-skills` UX exactly.
 - `cmd/integration_test.go` covers the three cases above.
-- `design-cli/SKILL.md` and `implement-cli/SKILL.md` updated per the impact
+- `agent-cli-design/SKILL.md` and `agent-cli-implement/SKILL.md` updated per the impact
   sections; bijection / structure unchanged.

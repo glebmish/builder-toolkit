@@ -1,15 +1,15 @@
 ---
-name: design-cli
+name: agent-cli-design
 description: "Use when designing any new agent-shaped CLI before any implementation work — covers the universal chassis: command surface, global flags, output contract, exit codes, error hints, auth, input hardening, response sanitization, file uploads, pagination, bundled skills, and the agent docs strategy. Stack- and source-agnostic; applies whether the CLI wraps an HTTP API, an SDK, local files, or hardware. If the CLI wraps an OpenAPI spec, pair with `wrap-api-spec` for spec-anchored introspection and the full-coverage gate."
 ---
 
-# design-cli
+# agent-cli-design
 
 ## Overview
 
 Design CLIs whose primary user is an AI agent. Human DX optimizes for discoverability and forgiveness; agent DX optimizes for predictability and defense-in-depth — these goals are different and cannot be retrofit into one interface. Design for agents first; layer human conveniences on top.
 
-This skill is the **design phase only**. Its output is a short design doc that downstream implementation consumes (e.g., `implement-cli` for the Go scaffolder).
+This skill is the **design phase only**. Its output is a short design doc that downstream implementation consumes (e.g., `agent-cli-implement` for the Go scaffolder).
 
 This skill is **stack-agnostic** — it applies whether the CLI is Go, Python, or anything else, and whether its data source is an HTTP API, an SDK, local files, or hardware. If the CLI wraps an OpenAPI spec, the `wrap-api-spec` skill overlays spec-anchored decisions on top of this one.
 
@@ -398,7 +398,7 @@ Output of this phase is `docs/design.md`. Structure (filled in for the running e
 - ...
 ```
 
-Hand `docs/design.md` to implementation. If the CLI wraps an OpenAPI spec, walk `wrap-api-spec` next — it appends spec-anchored sections (embedding, operation-mapping gate, envelope scan, pagination scheme, multipart operations) to the same doc before `implement-cli` consumes it.
+Hand `docs/design.md` to implementation. If the CLI wraps an OpenAPI spec, walk `wrap-api-spec` next — it appends spec-anchored sections (embedding, operation-mapping gate, envelope scan, pagination scheme, multipart operations) to the same doc before `agent-cli-implement` consumes it.
 
 ## Quick reference
 

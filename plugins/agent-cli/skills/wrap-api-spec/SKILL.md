@@ -1,19 +1,19 @@
 ---
 name: wrap-api-spec
-description: "Use when the CLI you're designing wraps an OpenAPI spec, on top of design-cli — adds spec-anchored decisions to the same design doc: embed the spec, derive `schema` from it, enforce full coverage via an operation-mapping gate, drive action verbs from operationIds, scan response schemas for the envelope decision, disambiguate reused path placeholders, classify pagination scheme from parameter shapes, and find multipart operations."
+description: "Use when the CLI you're designing wraps an OpenAPI spec, on top of agent-cli-design — adds spec-anchored decisions to the same design doc: embed the spec, derive `schema` from it, enforce full coverage via an operation-mapping gate, drive action verbs from operationIds, scan response schemas for the envelope decision, disambiguate reused path placeholders, classify pagination scheme from parameter shapes, and find multipart operations."
 ---
 
 # wrap-api-spec
 
 ## Overview
 
-This skill is an **overlay** on `design-cli`. `design-cli` covers the chassis any agent CLI needs — output contract, global flags, exit codes, error hints, input hardening, response sanitization, bundled skills. `wrap-api-spec` covers what changes when an OpenAPI spec exists for the API the CLI is wrapping.
+This skill is an **overlay** on `agent-cli-design`. `agent-cli-design` covers the chassis any agent CLI needs — output contract, global flags, exit codes, error hints, input hardening, response sanitization, bundled skills. `wrap-api-spec` covers what changes when an OpenAPI spec exists for the API the CLI is wrapping.
 
-Read `design-cli` first. Walk this overlay second. Record the spec-driven decisions in the same `docs/design.md`.
+Read `agent-cli-design` first. Walk this overlay second. Record the spec-driven decisions in the same `docs/design.md`.
 
 ## Why the spec changes the shape
 
-A spec gives you four things `design-cli` otherwise leaves to judgement:
+A spec gives you four things `agent-cli-design` otherwise leaves to judgement:
 
 - **A full enumeration of operations.** Coverage becomes a gate, not a guess.
 - **A canonical name per operation** (`operationId`). Action verb naming stops being a design problem.
@@ -24,7 +24,7 @@ In return, the CLI takes on one obligation: stay in sync with the spec — check
 
 ## Design checklist
 
-Walk through these in order. Each section produces a decision recorded in `docs/design.md` (alongside the chassis decisions from `design-cli`).
+Walk through these in order. Each section produces a decision recorded in `docs/design.md` (alongside the chassis decisions from `agent-cli-design`).
 
 ### 1. Spec embedding
 
@@ -120,7 +120,7 @@ If you're exposing an MCP surface, the marginal cost drops with a spec: the MCP 
 
 ## Sections to append to `docs/design.md`
 
-On top of `design-cli`'s template:
+On top of `agent-cli-design`'s template:
 
 ```markdown
 ## Spec
@@ -149,12 +149,12 @@ On top of `design-cli`'s template:
 - <operationId> — field name: <name>
 ```
 
-Hand `docs/design.md` + the OpenAPI spec to `implement-cli`.
+Hand `docs/design.md` + the OpenAPI spec to `agent-cli-implement`.
 
 ## Common mistakes specific to spec-wrapping
 
 - **Treating the spec as a build-time-only artifact** and shipping it as a sibling file. Embed it; the agent has to be able to call `schema` without internet.
-- **Hand-binding flags to every spec field** for every operation. `--json` plus the spec is the schema; convenience flags are sugar (`design-cli` §3).
+- **Hand-binding flags to every spec field** for every operation. `--json` plus the spec is the schema; convenience flags are sugar (`agent-cli-design` §3).
 - **Letting the operation-mapping test be a soft warning.** Either it fails the build or it'll silently rot.
 - **Auto-unwrapping the envelope silently** without recording the decision in the design doc — breaks `--fields` paths and the agent's mental model.
 - **Generating CLI code from the spec via codegen.** The spec is the *schema*; the command code is hand-written, thin, and reviewable. Codegen reintroduces the drift the operation-mapping test was designed to catch.

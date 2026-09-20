@@ -179,8 +179,7 @@ type FileUpload struct {
 // DoMultipart POSTs files as multipart/form-data with the given field name.
 // Conditional: include only if design.md says the API accepts uploads.
 //
-// Implementation omitted here; see the running CLIs (intelinvest's CSV
-// import) for a tested version. ~30 LOC: build mime/multipart writer, write
+// Implementation omitted here. ~30 LOC: build a mime/multipart writer, write
 // each FileUpload as a form-file, set Content-Type to mw.FormDataContentType().
 
 // helper omitted to keep the snippet a single-file paste; copy from a
