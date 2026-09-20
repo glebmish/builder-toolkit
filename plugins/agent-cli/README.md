@@ -115,4 +115,5 @@ deliberately rather than by accident:
   schema introspection.
 
 Design choices considered and deliberately parked are recorded in
-[`docs/pending-decisions.md`](docs/pending-decisions.md).
+[`docs/pending-decisions.md`](docs/pending-decisions.md); design records
+for individual changes live in [`docs/specs/`](docs/specs).

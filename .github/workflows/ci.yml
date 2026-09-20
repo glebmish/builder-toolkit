@@ -128,12 +128,18 @@ jobs:
         # schema validation if/when Anthropic ships one.
         run: |
           set -eu
-          for f in \
-            .claude-plugin/marketplace.json \
-            plugins/agent-cli/.claude-plugin/plugin.json \
-            plugins/git-history-rewrite/.claude-plugin/plugin.json \
-            plugins/share-artifact/.claude-plugin/plugin.json
+          # Discovered, not listed: a hardcoded list silently stops
+          # covering the next plugin somebody adds.
+          count=0
+          for f in .claude-plugin/marketplace.json \
+                   $(find plugins -name plugin.json -path '*/.claude-plugin/*' | sort)
           do
             echo "==> $f"
             jq empty "$f"
+            count=$((count + 1))
           done
+          if [ "$count" -lt 2 ]; then
+            echo "::error::only $count manifest(s) found — has the layout changed?"
+            exit 1
+          fi
+          echo "validated $count manifests"

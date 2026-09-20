@@ -467,7 +467,8 @@ Validation-error hint must name `acme skills list` so the agent self-recovers.
 | `config/config_test.go` | `t.TempDir()`; cascade priority cases (defaults → file → env → flags). |
 | `format/output_test.go` | Field filter, NDJSON, raw passthrough; sanitize cases (control chars, injection tags); envelope unwrap if applicable. |
 | `validate/input_test.go` | One case per rejection rule. |
-| `cmd/schema_test.go` or `cmd/integration_test.go` | The two-direction operation-mapping test in §11. |
+| `cmd/schema_test.go` or `cmd/integration_test.go` | The four-direction operation-mapping test in §11. |
+| `cmd/integration_test.go` | The `skills` group (§12): `skills list` default text output, `skills list --format json`, and `skills get <known>` returning body-first content. These are project-level — the shipped snippet only carries the operation-mapping directions, since it cannot know your skill set. |
 | `cmd/integration_test.go` | End-to-end: `t.Setenv("ACME_CONFIG", t.TempDir()+"/config.yaml")`, run cobra commands against `httptest.NewServer`. |
 
 The bijection test is the cheapest insurance against silent API drift — keep it green.

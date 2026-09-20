@@ -55,6 +55,11 @@ Install, prerequisites, and the privacy/cleanup model are in the
 
 Versioned releases are published at [GitHub Releases](https://github.com/glebmish/builder-toolkit/releases).
 
+Both install commands above resolve the default branch, not a tag — there
+is no way to pin an install to `vX.Y.Z`. Treat a release as a changelog
+anchor and a point to diff against, not as an install pin. Re-run the
+install command to pick up changes.
+
 ## License
 
 [MIT](LICENSE)

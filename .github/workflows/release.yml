@@ -5,10 +5,14 @@ name: Release
 # For a Claude Code plugin marketplace the "artifact" is the source tree at
 # the tag — `/plugin marketplace add <owner>/<repo>` clones the repo directly.
 # This workflow therefore:
-#   1. Re-runs the offline validators against the tagged tree (good-hygiene
-#      smoke; the skill calls it "not load-bearing" but cheap to keep honest).
+#   1. Checks that the tag and every manifest version agree. That is the
+#      only validation here — the content gates (hook tests, shellcheck,
+#      gofmt, JSON syntax) run in ci.yml on the way to main.
 #   2. Cuts a GitHub Release with auto-generated notes so users get a
 #      versioned anchor and changelog.
+#
+# Note that neither install surface resolves the tag: both clone the
+# default branch. The release is a changelog anchor, not an install pin.
 #
 # Versioning posture: git tags `vX.Y.Z` are canonical and must agree with the
 # `metadata.version` in `.claude-plugin/marketplace.json` and the `version` in
@@ -19,8 +23,9 @@ on:
     tags:
       - 'v*'
 
+# Scoped per job: only the release job needs write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -45,19 +50,37 @@ jobs:
       - name: Check plugin versions match tag
         run: |
           fail=0
+          count=0
           while IFS= read -r manifest; do
+            count=$((count + 1))
             plugin_version=$(jq -r '.version' "$manifest")
             if [ "$plugin_version" != "${{ steps.tag.outputs.version }}" ]; then
               echo "::error::$manifest version ($plugin_version) does not match tag (${{ steps.tag.outputs.version }})"
               fail=1
             fi
           done < <(find plugins -name plugin.json -path '*/.claude-plugin/*')
+          # Without this the loop passes vacuously: restructure plugins/ and
+          # the gate goes green having checked nothing.
+          if [ "$count" -eq 0 ]; then
+            echo "::error::found no plugin manifests to check — has plugins/ moved?"
+            exit 1
+          fi
+          # Every plugin directory must also be registered in the marketplace.
+          dirs=$(find plugins -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          listed=$(jq '.plugins | length' .claude-plugin/marketplace.json)
+          if [ "$dirs" != "$listed" ]; then
+            echo "::error::$dirs plugin directories but $listed registered in marketplace.json"
+            exit 1
+          fi
+          echo "checked $count plugin manifests; $listed registered"
           exit "$fail"
 
   release:
     name: Create GitHub Release
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

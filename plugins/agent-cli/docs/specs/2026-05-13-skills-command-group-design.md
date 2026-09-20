@@ -2,7 +2,8 @@
 
 **Date:** 2026-05-13
 **Scope:** `plugins/agent-cli` — both `agent-cli-design` and `agent-cli-implement` SKILL.md prescriptions.
-**Status:** approved for plan.
+**Status:** implemented in 0.2.0. Retained as a design record; the
+implementation plan that accompanied it has been removed.
 
 ## Problem
 
@@ -27,7 +28,7 @@ existing narrative.
 
 The existing `install-skills` command is replaced by a `skills` command group:
 
-```
+```text
 acme skills list                       # enumerate bundled skills
 acme skills get <name>                 # fetch one skill
 acme skills install [--output-dir P]   # current install-skills UX, moved under the group
@@ -43,7 +44,7 @@ Walks the embedded `internal/cmd/skills/` `embed.FS`, reads each
 
 **Default (text):** one line per skill, two-column.
 
-```
+```text
 acme-shared    Use when calling acme — global flags, schema discovery, exit codes.
 acme-projects  Use when working with projects — list/create/archive quirks.
 recipe-onboard-user  Use when bootstrapping a new acme user end-to-end.
@@ -78,7 +79,7 @@ Walks the embedded FS rooted at `<name>/`.
 frontmatter block stripped. Rationale: the agent has already seen
 `name` + `description` via `skills list`; the actionable content is the body.
 
-```
+```text
 $ acme skills get acme-shared
 # acme — agent reference
 
@@ -124,9 +125,16 @@ binary itself is malformed; users cannot fix them.
 - The `embed.FS` of `internal/cmd/skills/` stays put — same directory layout,
   same file mode rules (`0644` for files, `0755` for directories).
 - `PersistentPreRunE` offline-skip list: replace the `"install-skills"` case
-  with `"skills"` in `isOffline`. Because `isOffline` walks up the cobra
-  parent chain, matching on the group name automatically covers `skills`,
+  with `"skills"` in `isOffline`. Matching on the group name covers `skills`,
   `skills list`, `skills get`, and `skills install`.
+
+  > **Superseded.** This bullet originally justified the coverage by saying
+  > `isOffline` walks up the cobra parent chain. It no longer does, and
+  > that walk was the defect: a chain match treated an ordinary resource
+  > action such as `acme projects init` as offline, so it got no client and
+  > panicked on first use. `isOffline` now matches the **top-level** command
+  > only. The outcome for `skills` is unchanged — its top-level name is
+  > `skills` — but the mechanism above is not the one to copy.
 - Frontmatter parsing uses a minimal YAML dependency or a tiny hand-rolled
   splitter (`---\n…\n---\n`) — same approach used elsewhere in the snippets.
 - `cmd/integration_test.go` adds three cases:
@@ -136,7 +144,7 @@ binary itself is malformed; users cannot fix them.
 
 Reference table update (§ "Quick reference"):
 
-```
+```markdown
 | Skills | internal/cmd/skills/ + skills.go | embed.FS; list/get/install subcommands; runtime alt to disk install |
 ```
 
