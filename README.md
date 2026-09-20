@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/glebmish/builder-toolkit)](https://github.com/glebmish/builder-toolkit/releases)
 [![License: MIT](https://img.shields.io/github/license/glebmish/builder-toolkit)](LICENSE)
 
-Claude Code plugins and skills, loosely related to building projects.
+A collection of skills and plugins loosely related to building projects.
 
 Each entry below ships as a Claude Code plugin (via this marketplace) and
 as standalone skills installable with [`npx skills`](https://github.com/vercel-labs/skills).
