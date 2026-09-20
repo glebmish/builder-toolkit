@@ -10,7 +10,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/example/acme-cli/internal/api"
 	"github.com/example/acme-cli/internal/cliexit"
@@ -18,9 +20,25 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run wraps Execute so a panic becomes exit 5 (internal error) rather
+// than Go's default exit 2 — the code the contract reserves for auth
+// failures. Without this recover, any nil-deref told the agent its token
+// was bad and sent it off to re-authenticate. os.Exit is called from
+// main, never here, so deferred cleanup still runs.
+func run() (code int) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "internal error: %v\n%s\n", r, debug.Stack())
+			code = 5
+		}
+	}()
 	if err := cmd.Execute(); err != nil {
-		os.Exit(exitCode(err))
+		return exitCode(err)
 	}
+	return 0
 }
 
 func exitCode(err error) int {
@@ -43,5 +61,5 @@ func exitCode(err error) int {
 		}
 		return 1
 	}
-	return 1 // unexpected; reserve 5 for panics if you wire a recover
+	return 1 // unexpected; panics map to 5 via the recover in run()
 }

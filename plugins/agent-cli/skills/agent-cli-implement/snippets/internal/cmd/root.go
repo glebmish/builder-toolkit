@@ -6,12 +6,22 @@
 //
 // PersistentPreRunE skips offline subcommands (schema, skills, config,
 // help, init) so they run without a token, then runs the
-// defaults → file → env → flags cascade. The "skills" case covers
-// `skills list`, `skills get`, and `skills install` because the parent-
-// chain walk in isOffline matches the group name.
+// defaults → file → env → flags cascade.
+//
+// isOffline matches the TOP-LEVEL command only, never any name in the
+// parent chain. Matching anywhere meant a perfectly ordinary resource
+// action — `acme projects init`, `acme workspace config` — was treated as
+// offline, got no client, and panicked on first use. A command can also
+// opt in explicitly with Annotations["offline"]="true".
 package cmd
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/example/acme-cli/internal/api"
 	"github.com/example/acme-cli/internal/config"
 	"github.com/spf13/cobra"
@@ -26,9 +36,16 @@ var rootCmd = &cobra.Command{
 		if isOffline(cmd) {
 			return nil
 		}
-		cfg, err := config.Load(config.DefaultPath())
+		path, err := config.DefaultPath()
 		if err != nil {
 			return err
+		}
+		cfg, warning, err := config.LoadWithWarning(path)
+		if err != nil {
+			return err
+		}
+		if warning != "" {
+			fmt.Fprintln(os.Stderr, "warning:", warning)
 		}
 		cfg.ApplyEnv()
 		token, _ := cmd.Flags().GetString("access-token")
@@ -38,20 +55,42 @@ var rootCmd = &cobra.Command{
 		if err := cfg.Validate(); err != nil {
 			return err
 		}
+		// The credential is bound to an endpoint: say so loudly whenever
+		// the effective host is not the compiled-in default, because
+		// "retry with --base-url ..." is the payload to expect from any
+		// injected text that reaches the agent.
+		if cfg.BaseURL != config.DefaultBaseURL() {
+			fmt.Fprintf(os.Stderr, "warning: sending credentials to non-default endpoint %s\n", cfg.BaseURL)
+		}
 		client := api.NewClient(cfg.BaseURL, cfg.AccessToken, cfg.AccountID, "{accountId}")
 		cmd.SetContext(api.WithContext(cmd.Context(), client))
 		return nil
 	},
 }
 
+// offlineCommands are the TOP-LEVEL command names that run without auth.
+var offlineCommands = map[string]bool{
+	"schema": true, "skills": true, "config": true, "help": true,
+	"init": true, "completion": true, "version": true,
+}
+
 func isOffline(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
-		switch c.Name() {
-		case "schema", "skills", "config", "help", "init":
+		if c.Annotations["offline"] == "true" {
 			return true
 		}
 	}
-	return false
+	// Walk to the command directly beneath the root (the root is the only
+	// one with no parent) and match only that name. Referring to rootCmd
+	// by name here would create an initialization cycle.
+	if cmd.Parent() == nil {
+		return true // bare `acme` / `acme --help`
+	}
+	top := cmd
+	for top.Parent().Parent() != nil {
+		top = top.Parent()
+	}
+	return offlineCommands[top.Name()]
 }
 
 func init() {
@@ -64,11 +103,20 @@ func init() {
 	rootCmd.PersistentFlags().String("account-id", "", "override tenant ID")
 	rootCmd.PersistentFlags().String("json", "", "raw JSON request body for write ops; see 'acme schema <op>' for the shape")
 	rootCmd.PersistentFlags().String("params", "", "raw JSON object overlaying query/path params")
-	// Pagination (only if API paginates):
-	rootCmd.PersistentFlags().Bool("page-all", false, "auto-walk all pages, emit NDJSON, one page per line")
+	// BEGIN pagination flags — delete together with pagination.go and the
+	// marked block in helpers.go doGet when the API does not paginate.
+	rootCmd.PersistentFlags().Bool("page-all", false, "auto-walk all pages, emit one sanitized JSON line per page")
 	rootCmd.PersistentFlags().Int("page-limit", 10, "cap pages walked by --page-all (never unbounded)")
 	rootCmd.PersistentFlags().Int("page-delay", 100, "ms between paged requests")
 	rootCmd.PersistentFlags().Int("page-size", 100, "items per page when walking with --page-all")
+	// END pagination flags
 }
 
-func Execute() error { return rootCmd.Execute() }
+// Execute runs the root command under a context cancelled by SIGINT or
+// SIGTERM, so Ctrl-C actually cancels an in-flight request — the client is
+// context-plumbed throughout, and plain Execute() never used it.
+func Execute() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return rootCmd.ExecuteContext(ctx)
+}

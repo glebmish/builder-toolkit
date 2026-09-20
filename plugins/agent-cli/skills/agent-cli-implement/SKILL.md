@@ -17,13 +17,6 @@ Implements the design produced by `agent-cli-design` as a Go CLI built on Cobra 
 - An OpenAPI spec file (`openapi.yaml` or `spec.json`) — see Step 0.
 - Go ≥ 1.22, `yq` on PATH.
 
-## When to Use
-
-- Bootstrapping a fresh agent-first CLI in Go.
-- The design phase is complete (see `agent-cli-design`).
-
-**Don't use for:** non-Go implementations; modifying an existing CLI of this shape (use it as a reference).
-
 ## Running example
 
 Examples below use the same fictional CLI as `agent-cli-design`:
@@ -74,10 +67,12 @@ acme/
     │   └── cliexit.go        # AuthError, ValidationError, DiscoveryError typed errors
     ├── cmd/
     │   ├── root.go           # cobra root + persistent flags + config bootstrap
-    │   ├── helpers.go        # doGet, doMutate, doDelete, doPaginate, mergeParams, etc.
+    │   ├── helpers.go        # doGet, doMutate, doDelete, mergeParams, etc.
+    │   ├── helpers_test.go   # params rendering, confirmation typing, offline matching
+    │   ├── pagination.go     # doPaginate (conditional — own file so removal is a clean rm)
     │   ├── schema.go         # `schema --list`, `schema <op>`, `schema <Type>`
     │   ├── schema_test.go    # spec parsing, listing, type rendering
-    │   ├── integration_test.go  # operation-mapping test (spec ↔ map ↔ cobra)
+    │   ├── integration_test.go  # operation-mapping test (all four directions)
     │   ├── config_cmd.go     # `config init`, `config path`, `config show --unmasked`
     │   ├── skills.go         # `skills list`, `skills get`, `skills install`
     │   ├── users.go          # one file per resource group
@@ -103,7 +98,9 @@ acme/
 
 **Universal**: `main.go`, everything in `api/`, `cliexit/`, `config/`, `format/`, `validate/`, `cmd/{root,helpers,schema,schema_test,integration_test,skills,config_cmd}.go`.
 
-**Conditional on the design**: `DoMultipart` in client (only if API accepts uploads), `unwrapEnvelope` in format (only if design says envelope=yes), `doPaginate` (only if API paginates), API-specific helpers (`doDownload`, `doUpload`, `doPostDelete` — see §8), per-API quirk validators.
+**Conditional on the design**: `DoMultipart` in client (only if API accepts uploads), `unwrapEnvelope` in format (only if design says envelope=yes), `pagination.go` (only if API paginates), API-specific helpers (`doDownload`, `doUpload`, `doPostDelete` — see §8), per-API quirk validators.
+
+**Removing pagination is three deletions, and the package does not compile until all three are done**: `internal/cmd/pagination.go`, the `BEGIN/END pagination` block in `doGet`, and the `BEGIN/END pagination flags` block in `root.go`. The markers are in the snippets. `doPaginate` lives in its own file for exactly this reason — when it sat in `helpers.go`, deleting it orphaned the `strconv` and `time` imports.
 
 ## Step-by-step
 
@@ -132,6 +129,8 @@ Three typed error wrappers in `internal/cliexit/`:
 | `*DiscoveryError` | exit 4 (spec/schema problem) |
 
 `api.APIError` already exists in `internal/api/`. Its `IsAuth()` (true on 401/403) is also exit 2; otherwise exit 1.
+
+**Wire the `recover` in `main.go`.** Go exits **2** on an unrecovered panic — the same code the contract reserves for auth failures. Without the recover, any nil-deref tells the agent its token is bad and sends it off to re-authenticate, and the documented code 5 ("internal error") is unreachable. `main` calls `os.Exit(run())`; `run` defers a `recover` that prints the stack to stderr and returns 5.
 
 **Frame-of-reference: typed at source.** Callers don't remember to wrap. Validators (§6) return typed errors at the source so every callsite propagates the right exit code automatically. `cfg.Validate()` returns `*cliexit.AuthError`. `schema.go` parse failures return `*cliexit.DiscoveryError`. The HTTP client's 401/403 are detected via `APIError.IsAuth()`. The downside (validate package importing cliexit) is a single, no-cycle, no-allocation dependency — pay it once.
 
@@ -185,16 +184,16 @@ The default `BaseURL` is hard-coded in `Load` so a fresh install with no config 
 
 `Write(w, data, opts)` pipeline:
 
-1. `json.Unmarshal` — non-JSON bodies (plain strings, integer timestamps) pass through as-is.
+1. Decode with `json.Decoder` + **`UseNumber()`** — a plain `json.Unmarshal` into `any` turns every number into a `float64`, so re-encoding silently corrupts integer IDs past 2^53 (`...789` → `...800`). Non-JSON bodies pass through, **still sanitized** — an API returning an HTML error page is precisely the case sanitization exists for.
 2. (Conditional) `unwrapEnvelope(v, "data", recursive)` — only included when `docs/design.md` says `Envelope: yes`.
-3. `sanitize(v)` — strip control chars + `<system>`/`<assistant>`/`<tool_use>`/`<tool_result>` tag wrappers from string fields. Always on.
+3. `sanitize(v)` — strip control chars and XML-ish tag wrappers (`<system>`, `<assistant>`, `<human>`, `<user>`, `<thinking>`, `<tool_use>`, `<tool_result>`, …) from string fields. Applied on **every** path that reaches stdout or stderr, including paged output, the non-JSON fallback, and `APIError.Error()`. Stripping loops to a fixpoint: a single pass lets `<sys<system>tem>` collapse into the very tag it was meant to remove. This stops accidents, not adversaries — see `agent-cli-design` §13.
 4. `filterFields(v, opts.Fields)` — dotted-path mask, descends into arrays implicitly.
-5. Encode as pretty JSON or NDJSON per `--format`.
+5. Encode as pretty JSON, NDJSON, or text per `--format`. Validate the flag value with `format.Validate` first — an unrecognised `--format tesxt` must be rejected, not silently treated as JSON.
 
 `sanitize` and `filterFields` are fully generic — paste verbatim from the snippet, no per-API tweaks. `filterFields` builds a trie so a single walk handles arbitrary depth (`rows.id` filters `{"rows":[{"id":1,"x":2}]}` → `{"rows":[{"id":1}]}`).
 
 Other helpers in the same file:
-- `WriteRaw(w, data)` — bypass parsing for cases where the caller already produced bytes (e.g. NDJSON pages from `doPaginate`).
+- `WriteLine(w, data, opts)` — one compact JSON line through the same sanitize + field-mask pipeline. Used by the pagination walk so "one page per line" holds even when the server pretty-prints. There is deliberately **no** raw-bytes escape hatch: a bypass is how paged output ended up as the one unsanitized path.
 - `DryRunOutput(w, preview)` — used by every helper when `--dry-run` is set.
 
 ### 6. internal/validate/input.go
@@ -210,7 +209,7 @@ func vErr(format string, args ...any) error {
 ```
 
 Built-in validators:
-- `PathParam(name, value)` — non-empty, no `..`, no `?`/`#`/`&`, no `%`, no control chars.
+- `PathParam(name, value)` — non-empty, no `..`, **no `/` or `\`**, no `;`, no `?`/`#`/`&`, no `%`, no control chars. Rejecting separators matters as much as rejecting traversal: `42/secrets` is not traversal, but it still reaches a different endpoint under a valid credential. Defence in depth — `buildURL` also escapes every substituted segment, so a missed callsite is not on its own exploitable.
 - `IntParam(name, value)` — non-empty, parses as Go int (allows negatives).
 - `DateParam(name, value)` — strict `YYYY-MM-DD`.
 - `JSONBody(body)` — non-empty, no rogue control chars, parses as JSON.
@@ -230,7 +229,9 @@ Two cobra settings that matter:
 - `SilenceUsage: true` — don't dump cobra's `--help` block on every error. Without this, every failure costs the agent ~30–80 lines of usage output.
 - `SilenceErrors: false` (the default; set explicitly for clarity) — let cobra print the error itself. `main.go` does NOT print, only maps the error type to an exit code. Setting `SilenceErrors: true` *and* having `main.go` print would work too, but the cobra-prints version keeps `main.go` tiny.
 
-`PersistentPreRunE` skips offline subcommands first — they must run without a token: `schema`, `skills`, `config`, `help`, `init`. The `skills` entry covers `skills list`, `skills get`, and `skills install` because `isOffline` walks the cobra parent chain. Then load → ApplyEnv → ApplyFlags → Validate → stash client on context.
+`PersistentPreRunE` skips offline subcommands first — they must run without a token: `schema`, `skills`, `config`, `help`, `init`. Then load → ApplyEnv → ApplyFlags → Validate → stash client on context.
+
+**Match the top-level command only, never any name in the parent chain.** Matching anywhere meant an ordinary resource action — `acme projects init`, `acme workspace config` — was classified offline, got no client, and panicked on first use. `isOffline` walks to the command directly beneath the root and matches that name; a command may also opt in explicitly with `Annotations["offline"]="true"`. `skills install` still resolves because its top-level name is `skills`.
 
 Persistent flags (standard set per `agent-cli-design` §3): `--format`, `--fields`, `--dry-run`, `--yes`, `--access-token`, `--base-url`, `--account-id` (if tenant), `--json`, `--params`, plus pagination flags (only if API paginates): `--page-all`, `--page-limit`, `--page-delay`, `--page-size`.
 
@@ -244,7 +245,7 @@ Every resource-file command goes through one of these:
 
 | Helper | Wraps |
 |---|---|
-| `doGet(cmd, path, params)` | JSON GET; falls through to `doPaginate` when `--page-all` is set |
+| `doGet(cmd, path, params)` | JSON GET; falls through to `doPaginate` when `--page-all` is set (conditional block) |
 | `doMutate(cmd, method, path, params, jsonBody)` | POST / PUT / PATCH with optional JSON body |
 | `doDelete(cmd, path, params, resource, id)` | HTTP DELETE with `--yes` confirmation |
 
@@ -261,11 +262,17 @@ Plus accessors:
 
 #### mergeParams: caller wins on collision
 
-Order matters. `--params` is overlaid first, then `base` is written on top so caller-set keys (validated path params, etc.) win on collision. `--params` is strictly additive — it can fill query-param gaps the command didn't expose, but cannot silently override path or required params the command built itself.
+Order matters. `--params` is overlaid first, then `base` is written on top so caller-set keys (validated path params, etc.) win on collision — `--params` cannot override a param the command **explicitly set**.
 
-#### doPaginate (only if API paginates)
+It is **not** strictly additive, and the earlier wording overstated the guarantee: a `{placeholder}` the command left unset is still filled from `--params` and substituted into the path. That is by design (it is how an agent reaches a sub-resource the command didn't expose), so the safety comes from `buildURL` escaping every substituted value rather than from `mergeParams` refusing it.
+
+Decode `--params` with `UseNumber()` and render scalars via `paramString`. A plain `json.Unmarshal` into `map[string]any` made `{"offset":1000000}` arrive on the wire as `offset=1e+06`; small values happened to work, so it passed every casual test and failed only at scale. Non-scalar values are rejected — a nested object has no sane query-string rendering.
+
+#### doPaginate (only if API paginates — `internal/cmd/pagination.go`)
 
 Snippet ships an offset/limit version + a generic `pageItemCount` stop helper that recognises `{content|rows|items|data: [...]}` envelopes and bare top-level arrays.
+
+Change **both** `pageSizeParam` and `pageOffsetParam` to match the API, not just the offset line. A wrong limit key is silently ignored by the server, the first page comes back short, and the walk stops after one page looking perfectly successful. The walk warns on stderr whenever it stops on an unrecognised page shape or hits `--page-limit`, because a silent stop is indistinguishable from "that was all the data".
 
 For page-number or cursor schemes, swap the per-scheme line at the marked spot in `doPaginate` and adjust the stop condition:
 
@@ -311,6 +318,23 @@ func newProjectsListCmd() *cobra.Command {
     return cmd
 }
 
+func newProjectsGetCmd() *cobra.Command {
+    cmd := &cobra.Command{
+        Use:   "get",
+        Short: "Get a project (GET /v1/accounts/{accountId}/projects/{projectId})",
+        RunE: func(cmd *cobra.Command, args []string) error {
+            id, err := requireString(cmd, "id")
+            if err != nil { return err }
+            // Path params go through PathParam before they reach the URL.
+            if err := validate.PathParam("id", id); err != nil { return err }
+            return doGet(cmd, "/v1/accounts/{accountId}/projects/{projectId}",
+                map[string]string{"projectId": id})
+        },
+    }
+    cmd.Flags().String("id", "", "project id (required)")
+    return cmd
+}
+
 func newProjectsCreateCmd() *cobra.Command {
     cmd := &cobra.Command{
         Use:   "create",
@@ -326,12 +350,13 @@ func newProjectsCreateCmd() *cobra.Command {
 
 func init() {
     parent := &cobra.Command{Use: "projects", Short: "Project ops"}
-    parent.AddCommand(newProjectsListCmd(), newProjectsCreateCmd())
+    parent.AddCommand(newProjectsListCmd(), newProjectsGetCmd(), newProjectsCreateCmd())
     rootCmd.AddCommand(parent)
 }
 ```
 
 Rules:
+- **Every path param goes through `validate.PathParam` before it reaches `doGet`/`doMutate`**, as in `newProjectsGetCmd` above. `buildURL` escapes segments as a backstop, but the validator is what produces an actionable exit-3 message instead of a server 404.
 - One file per resource group; one `init()` registers everything.
 - Each operation is `newResourceActionCmd() *cobra.Command`.
 - Required flags validated **manually** in `RunE` via `requireString` — no `MarkFlagRequired` (its error messages are bad and it short-circuits before `--dry-run` can preview).
@@ -343,7 +368,7 @@ Rules:
 
 → `snippets/internal/cmd/schema.go`.
 
-The OpenAPI spec is embedded at build time via `//go:embed openapi-spec.json`. The `operationIDToCommand` map is the single source of truth for spec ↔ CLI names; the bijection test (§11) enforces no orphans in either direction.
+The OpenAPI spec is embedded at build time via `//go:embed openapi-spec.json`. The `operationIDToCommand` map is the single source of truth for spec ↔ CLI names; the bijection test (§11) enforces no orphans in any of its four directions.
 
 ```go
 //go:embed openapi-spec.json
@@ -367,7 +392,18 @@ Errors that indicate spec/schema problems return `*cliexit.DiscoveryError` so th
 
 → `snippets/internal/cmd/integration_test.go`.
 
-A "bijection" check: every spec op ↔ every CLI command, no orphans either direction. Catches API drift the moment you regenerate the spec.
+A "bijection" check across **four** directions, because two are not enough:
+
+| Direction | Catches |
+|---|---|
+| spec → map | a new endpoint with no CLI mapping |
+| map → spec | a **stale** mapping whose endpoint was removed from the spec |
+| map → cobra | a typo or rename in the map |
+| cobra → map | a command registered but never mapped |
+
+Checking only spec→map and map→cobra lets a stale entry survive a regenerated spec: `schema --list` stops advertising it while agents can still invoke it against a dead endpoint — the exact drift this test is sold as preventing.
+
+The test must also **fail loudly on an empty or truncated spec**. Asserting `paths` is present and non-empty is what stops every other assertion becoming a vacuous pass when `make spec` leaves a zero-byte file.
 
 **File location: either `schema_test.go` or `integration_test.go`** — both are reasonable. The test traverses the embedded spec and the whole cobra tree, so calling it integration-shaped is honest; calling it schema-shaped is also fine. Pick one and don't split the bijection itself across files. If you also have small unit tests for spec parsing or `--list` rendering, those go in `schema_test.go` regardless.
 
@@ -475,12 +511,12 @@ Put this verbatim in `CLAUDE.md`:
 | Typed errors | `internal/cliexit/cliexit.go` | `AuthError`/`ValidationError`/`DiscoveryError` |
 | HTTP client | `internal/api/client.go` | Hand-written; Bearer or Basic; one tenant placeholder; `IsAuth()` for 401/403 |
 | File uploads | `internal/api/client.go` | `DoMultipart` (only if API accepts multipart) |
-| Pagination | `internal/cmd/helpers.go doPaginate` | Per-scheme loop body; emits NDJSON; GETs only |
+| Pagination | `internal/cmd/pagination.go doPaginate` | Per-scheme loop body; one sanitized JSON line per page; GETs only; warns on stderr when it stops early |
 | Config cascade | `internal/config/config.go` | defaults → file → env → flags; `Validate` returns `*cliexit.AuthError` |
 | Output formatter | `internal/format/output.go` | `Write` does sanitize + envelope-unwrap (opt-in) + filterFields + JSON/NDJSON |
 | Input validators | `internal/validate/input.go` | Return `*cliexit.ValidationError` directly |
 | Cobra root | `internal/cmd/root.go` | `SilenceUsage:true`; offline skip in `PersistentPreRunE` |
-| Workhorse helpers | `internal/cmd/helpers.go` | `doGet`, `doMutate`, `doDelete`, `doPaginate` + accessors + API-specific extensions |
+| Workhorse helpers | `internal/cmd/helpers.go` | `doGet`, `doMutate`, `doDelete` + accessors + API-specific extensions |
 | Resource commands | `internal/cmd/<resource>.go` | One file per group; `init()` registers all; disambiguated placeholders |
 | Schema introspection | `internal/cmd/schema.go` | `//go:embed openapi-spec.json` + `operationIDToCommand` map |
 | Operation-mapping test | `internal/cmd/{schema,integration}_test.go` | Two directions: spec→map, map→cobra |

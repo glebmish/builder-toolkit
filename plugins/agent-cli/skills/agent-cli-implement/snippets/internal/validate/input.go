@@ -23,12 +23,23 @@ func vErr(format string, args ...any) error {
 }
 
 // PathParam validates that a value is safe to embed in a URL path segment.
+//
+// Rejecting the separators matters as much as rejecting traversal: a value
+// like "42/secrets" is not traversal, but it still reaches a different
+// endpoint under a valid credential. This is defence in depth — the client
+// also escapes path segments, so a miss here is not on its own exploitable.
 func PathParam(name, value string) error {
 	if value == "" {
 		return vErr("%s is required", name)
 	}
 	if strings.Contains(value, "..") {
 		return vErr("%s contains path traversal", name)
+	}
+	if strings.ContainsAny(value, `/\`) {
+		return vErr("%s must not contain a path separator (it would address a different endpoint)", name)
+	}
+	if strings.Contains(value, ";") {
+		return vErr("%s must not contain ; (matrix parameter injection)", name)
 	}
 	if strings.ContainsAny(value, "?#&") {
 		return vErr("%s must not contain ?, #, or & (query injection)", name)

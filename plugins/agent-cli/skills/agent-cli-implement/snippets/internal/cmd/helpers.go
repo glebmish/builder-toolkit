@@ -6,8 +6,10 @@
 //	doMutate  — POST/PUT/PATCH with optional JSON body
 //	doDelete  — HTTP DELETE with --yes confirmation
 //
-// Each helper checks --dry-run before any HTTP call. Each routes through
-// format.Write (sanitization + field mask) on the way to stdout.
+// Each helper checks --dry-run before any HTTP call — including the
+// destructive ones, where the confirmation gate must not preempt the
+// preview. Each routes through format.Write (sanitization + field mask)
+// on the way to stdout; nothing writes response bytes to stdout directly.
 //
 // API-specific helpers (extend, don't inline) — add when patterns repeat:
 //
@@ -17,12 +19,12 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strconv"
-	"time"
 
 	"github.com/example/acme-cli/internal/api"
 	"github.com/example/acme-cli/internal/cliexit"
@@ -31,10 +33,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func fmtOpts(cmd *cobra.Command) format.Options {
+func fmtOpts(cmd *cobra.Command) (format.Options, error) {
 	f, _ := cmd.Flags().GetString("format")
+	canonical, err := format.Validate(f)
+	if err != nil {
+		return format.Options{}, &cliexit.ValidationError{Err: err}
+	}
 	fields, _ := cmd.Flags().GetString("fields")
-	return format.FormatFromFlag(f, fields)
+	return format.FormatFromFlag(canonical, fields), nil
+}
+
+// client fetches the bootstrapped API client, surfacing a typed error
+// instead of a nil pointer when the command was treated as offline.
+func client(cmd *cobra.Command) (*api.Client, error) {
+	return api.FromContext(cmd.Context())
+}
+
+// maxResponseBody caps a success body the same way the error path is
+// capped — an unbounded read lands straight in the agent's context.
+const maxResponseBody = 32 << 20
+
+func readBody(r io.Reader, what string) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxResponseBody))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", what, err)
+	}
+	return body, nil
 }
 
 func requireString(cmd *cobra.Command, name string) (string, error) {
@@ -58,9 +82,14 @@ func requireJSON(cmd *cobra.Command) (string, error) {
 
 // mergeParams overlays the persistent --params JSON onto base. Order
 // matters: --params is overlaid first, then `base` is written on top so
-// caller-set keys (validated path params, etc.) win on collision. --params
-// is strictly additive — it can fill gaps the command didn't expose, but
-// cannot silently override path or required params the command built.
+// caller-set keys (validated path params, etc.) win on collision.
+//
+// --params cannot override a param the command EXPLICITLY SET, but it is
+// not "strictly additive": a {placeholder} the command left unset is
+// still filled from here and substituted into the path. That is
+// deliberate — it is how an agent reaches a sub-resource the command did
+// not expose — so the safety comes from buildURL escaping every
+// substituted value, not from this function refusing it.
 func mergeParams(cmd *cobra.Command, base map[string]string) (map[string]string, error) {
 	merged := map[string]string{}
 	raw, _ := cmd.Flags().GetString("params")
@@ -68,12 +97,18 @@ func mergeParams(cmd *cobra.Command, base map[string]string) (map[string]string,
 		if err := validate.JSONBody(raw); err != nil {
 			return nil, err
 		}
+		dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+		dec.UseNumber() // else 1000000 renders as "1e+06" on the wire
 		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		if err := dec.Decode(&m); err != nil {
 			return nil, &cliexit.ValidationError{Err: fmt.Errorf("--params: %w", err)}
 		}
 		for k, v := range m {
-			merged[k] = fmt.Sprint(v)
+			sv, err := paramString(v)
+			if err != nil {
+				return nil, &cliexit.ValidationError{Err: fmt.Errorf("--params %s: %w", k, err)}
+			}
+			merged[k] = sv
 		}
 	}
 	for k, v := range base {
@@ -82,28 +117,60 @@ func mergeParams(cmd *cobra.Command, base map[string]string) (map[string]string,
 	return merged, nil
 }
 
+// paramString renders a JSON scalar as the server should see it.
+// json.Number keeps the caller's literal, so large integers survive and
+// nothing arrives in scientific notation.
+func paramString(v any) (string, error) {
+	switch val := v.(type) {
+	case json.Number:
+		return val.String(), nil
+	case string:
+		return val, nil
+	case bool:
+		return fmt.Sprintf("%t", val), nil
+	case nil:
+		return "", nil
+	default:
+		return "", fmt.Errorf("expected a scalar, got %T", v)
+	}
+}
+
 func doGet(cmd *cobra.Command, path string, params map[string]string) error {
 	merged, err := mergeParams(cmd, params)
 	if err != nil {
 		return err
 	}
-	c := api.FromContext(cmd.Context())
+	opts, err := fmtOpts(cmd)
+	if err != nil {
+		return err
+	}
+	c, err := client(cmd)
+	if err != nil {
+		return err
+	}
 	if dr, _ := cmd.Flags().GetBool("dry-run"); dr {
-		return format.DryRunOutput(os.Stdout, c.DryRun("GET", path, merged, nil))
+		preview, err := c.DryRun("GET", path, merged, nil)
+		if err != nil {
+			return err
+		}
+		return format.DryRunOutput(os.Stdout, preview)
 	}
+	// BEGIN pagination — delete this block together with pagination.go and
+	// the four page-* flags in root.go when the API does not paginate.
 	if all, _ := cmd.Flags().GetBool("page-all"); all {
-		return doPaginate(cmd, path, merged)
+		return doPaginate(cmd, path, merged, opts)
 	}
+	// END pagination
 	resp, err := c.DoWithContext(cmd.Context(), "GET", path, merged, nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBody(resp.Body, "response")
 	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
+		return err
 	}
-	return format.Write(os.Stdout, body, fmtOpts(cmd))
+	return format.Write(os.Stdout, body, opts)
 }
 
 func doMutate(cmd *cobra.Command, method, path string, params map[string]string, jsonBody string) error {
@@ -111,7 +178,14 @@ func doMutate(cmd *cobra.Command, method, path string, params map[string]string,
 	if err != nil {
 		return err
 	}
-	c := api.FromContext(cmd.Context())
+	opts, err := fmtOpts(cmd)
+	if err != nil {
+		return err
+	}
+	c, err := client(cmd)
+	if err != nil {
+		return err
+	}
 	var body []byte
 	if jsonBody != "" {
 		if err := validate.JSONBody(jsonBody); err != nil {
@@ -120,28 +194,38 @@ func doMutate(cmd *cobra.Command, method, path string, params map[string]string,
 		body = []byte(jsonBody)
 	}
 	if dr, _ := cmd.Flags().GetBool("dry-run"); dr {
-		return format.DryRunOutput(os.Stdout, c.DryRun(method, path, merged, body))
+		preview, err := c.DryRun(method, path, merged, body)
+		if err != nil {
+			return err
+		}
+		return format.DryRunOutput(os.Stdout, preview)
 	}
 	resp, err := c.DoWithContext(cmd.Context(), method, path, merged, body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body, "response")
 	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
+		return err
 	}
 	if len(respBody) == 0 {
 		// 204 No Content — typical for action endpoints. Tell the agent.
 		fmt.Fprintf(os.Stderr, "%s %s → %d (empty body; refetch to see the effect)\n", method, path, resp.StatusCode)
 		return nil
 	}
-	return format.Write(os.Stdout, respBody, fmtOpts(cmd))
+	return format.Write(os.Stdout, respBody, opts)
 }
 
+// doDelete previews before it confirms. --dry-run must reach the preview:
+// an agent asking "what would this delete?" was answered with "pass --yes"
+// when the confirmation gate ran first, which is the one case --dry-run
+// exists to serve.
 func doDelete(cmd *cobra.Command, path string, params map[string]string, resource, id string) error {
-	if err := confirmDelete(cmd, resource, id); err != nil {
-		return err
+	if dr, _ := cmd.Flags().GetBool("dry-run"); !dr {
+		if err := confirmDelete(cmd, resource, id); err != nil {
+			return err
+		}
 	}
 	return doMutate(cmd, "DELETE", path, params, "")
 }
@@ -151,92 +235,21 @@ func confirmDelete(cmd *cobra.Command, resource, id string) error {
 	if yes {
 		return nil
 	}
-	fi, _ := os.Stdin.Stat()
-	if (fi.Mode() & os.ModeCharDevice) == 0 {
-		return fmt.Errorf("delete %s %s requires --yes flag in non-interactive mode", resource, id)
+	// A failed Stat (closed stdin, as in some agent harnesses) is treated
+	// as non-interactive rather than dereferenced — this is the
+	// destructive-operation path, the worst place for a nil panic.
+	fi, err := os.Stdin.Stat()
+	if err != nil || (fi.Mode()&os.ModeCharDevice) == 0 {
+		return &cliexit.ValidationError{Err: fmt.Errorf("delete %s %s requires --yes in non-interactive mode", resource, id)}
 	}
 	fmt.Fprintf(os.Stderr, "Delete %s %s? [y/N] ", resource, id)
 	var resp string
-	fmt.Scanln(&resp)
+	// A read failure means no affirmative answer; fall through to cancel.
+	if _, err := fmt.Scanln(&resp); err != nil && !errors.Is(err, io.EOF) {
+		resp = ""
+	}
 	if resp != "y" && resp != "Y" {
-		return fmt.Errorf("cancelled")
+		return &cliexit.ValidationError{Err: fmt.Errorf("cancelled")}
 	}
 	return nil
-}
-
-// ---- Pagination (only if API paginates) ----------------------------------
-
-// doPaginate walks an offset/limit GET endpoint with --page-all. Emits
-// one NDJSON line per page on stdout. Stops when the page response's
-// items array is shorter than --page-size, or when --page-limit is hit.
-//
-// For page-number or cursor schemes, swap the per-scheme line at the
-// marked spot and adjust the stop condition.
-func doPaginate(cmd *cobra.Command, path string, params map[string]string) error {
-	c := api.FromContext(cmd.Context())
-	pageSize, _ := cmd.Flags().GetInt("page-size")
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-	pageLimit, _ := cmd.Flags().GetInt("page-limit")
-	if pageLimit <= 0 {
-		pageLimit = 10
-	}
-	delay, _ := cmd.Flags().GetInt("page-delay")
-
-	walking := map[string]string{}
-	for k, v := range params {
-		walking[k] = v
-	}
-	walking["limit"] = strconv.Itoa(pageSize)
-
-	for page := 0; page < pageLimit; page++ {
-		// Per-scheme — pick one based on design.md:
-		walking["offset"] = strconv.Itoa(page * pageSize) // OFFSET-LIMIT
-		// walking["page"]   = strconv.Itoa(page + 1)     // PAGE-NUMBER
-		// walking["cursor"] = nextCursor                 // CURSOR (read from prev response)
-
-		resp, err := c.DoWithContext(cmd.Context(), "GET", path, walking, nil)
-		if err != nil {
-			return err
-		}
-		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			return fmt.Errorf("reading page %d: %w", page, readErr)
-		}
-		if _, err := os.Stdout.Write(append(body, '\n')); err != nil {
-			return err
-		}
-		count, ok := pageItemCount(body)
-		if !ok || count < pageSize {
-			return nil
-		}
-		if delay > 0 && page+1 < pageLimit {
-			time.Sleep(time.Duration(delay) * time.Millisecond)
-		}
-	}
-	return nil
-}
-
-// pageItemCount returns the length of the items array for common pageable
-// shapes ({content|rows|items|data: [...]}) or for a bare top-level array.
-// Returns ok=false when the shape is unrecognised — callers stop walking
-// conservatively.
-func pageItemCount(body []byte) (int, bool) {
-	var v any
-	if err := json.Unmarshal(body, &v); err != nil {
-		return 0, false
-	}
-	switch val := v.(type) {
-	case []any:
-		return len(val), true
-	case map[string]any:
-		for _, k := range []string{"content", "rows", "items", "data"} {
-			if arr, ok := val[k].([]any); ok {
-				return len(arr), true
-			}
-		}
-	}
-	return 0, false
 }

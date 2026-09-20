@@ -15,6 +15,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -52,7 +53,7 @@ var schemaCmd = &cobra.Command{
 		}
 		resolveRefs, _ := cmd.Flags().GetBool("resolve-refs")
 		if list, _ := cmd.Flags().GetBool("list"); list {
-			return printList(spec)
+			return printList(cmd.OutOrStdout(), spec)
 		}
 		if len(args) == 0 {
 			return discoveryErr(fmt.Errorf("provide an operation (e.g. projects.list) or type (e.g. Project)\n  Use --list to see all operations"))
@@ -79,7 +80,9 @@ func parseSpec() (map[string]any, error) {
 	return spec, nil
 }
 
-func printList(spec map[string]any) error {
+// printList writes to the passed writer rather than os.Stdout so cobra's
+// output capture works and the command is testable.
+func printList(w io.Writer, spec map[string]any) error {
 	type row struct{ cli, method, path string }
 	var rows []row
 	paths, _ := spec["paths"].(map[string]any)
@@ -100,7 +103,7 @@ func printList(spec map[string]any) error {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].cli < rows[j].cli })
 	for _, r := range rows {
-		fmt.Printf("  %-40s %-6s %s\n", r.cli, r.method, r.path)
+		fmt.Fprintf(w, "  %-40s %-6s %s\n", r.cli, r.method, r.path)
 	}
 	return nil
 }
