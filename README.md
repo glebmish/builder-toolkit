@@ -4,10 +4,10 @@
 [![Release](https://img.shields.io/github/v/release/glebmish/builder-toolkit)](https://github.com/glebmish/builder-toolkit/releases)
 [![License: MIT](https://img.shields.io/github/license/glebmish/builder-toolkit)](LICENSE)
 
-A collection of skills and plugins loosely related to building projects.
+Claude Code plugins and skills, loosely related to building projects.
 
 Each entry below ships as a Claude Code plugin (via this marketplace) and
-as a standalone skill installable with [`npx skills`](https://github.com/vercel-labs/skills).
+as standalone skills installable with [`npx skills`](https://github.com/vercel-labs/skills).
 Bundled hooks (where present) are only registered on the plugin-install
 path; the skill-only install gives you the SKILL.md without hook
 enforcement.
@@ -16,6 +16,10 @@ enforcement.
 claude plugin marketplace add glebmish/builder-toolkit
 npx skills add glebmish/builder-toolkit
 ```
+
+The first command adds the marketplace but installs nothing — each plugin
+README has its `claude plugin install` line. The second offers every skill
+in the repo for selection.
 
 ## Plugins
 
@@ -55,10 +59,17 @@ Install, prerequisites, and the privacy/cleanup model are in the
 
 Versioned releases are published at [GitHub Releases](https://github.com/glebmish/builder-toolkit/releases).
 
-Both install commands above resolve the default branch, not a tag — there
-is no way to pin an install to `vX.Y.Z`. Treat a release as a changelog
-anchor and a point to diff against, not as an install pin. Re-run the
-install command to pick up changes.
+Both install commands above resolve the default branch: neither accepts a
+ref, so an install does not track `vX.Y.Z`. Treat a release as a changelog
+anchor and a point to diff against rather than an install pin. (You can
+still pin by hand — clone at a tag and add the marketplace from that local
+path.)
+
+To pick up changes: re-run `npx skills add` for the skills install, which
+overwrites in place. The plugin install needs `claude plugin marketplace
+update builder-toolkit` followed by `claude plugin update <plugin>` —
+re-running `marketplace add` is a no-op once the marketplace is
+configured.
 
 ## License
 

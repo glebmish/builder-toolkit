@@ -71,8 +71,8 @@ acme/
     │   ├── helpers_test.go   # params rendering, confirmation typing, offline matching
     │   ├── pagination.go     # doPaginate (conditional — own file so removal is a clean rm)
     │   ├── schema.go         # `schema --list`, `schema <op>`, `schema <Type>`
-    │   ├── schema_test.go    # spec parsing, listing, type rendering
     │   ├── integration_test.go  # operation-mapping test (all four directions)
+    │   ├── schema_test.go    # optional: spec parsing, `--list` rendering
     │   ├── config_cmd.go     # `config init`, `config path`, `config show --unmasked`
     │   ├── skills.go         # `skills list`, `skills get`, `skills install`
     │   ├── users.go          # one file per resource group
@@ -96,7 +96,7 @@ acme/
         └── input_test.go
 ```
 
-**Universal**: `main.go`, everything in `api/`, `cliexit/`, `config/`, `format/`, `validate/`, `cmd/{root,helpers,schema,schema_test,integration_test,skills,config_cmd}.go`.
+**Universal**: `main.go`, everything in `api/`, `cliexit/`, `config/`, `format/`, `validate/`, `cmd/{root,helpers,schema,integration_test,skills,config_cmd}.go`. `schema_test.go` is optional — the bijection test only needs one home, and `integration_test.go` is it by default (§11).
 
 **Conditional on the design**: `DoMultipart` in client (only if API accepts uploads), `unwrapEnvelope` in format (only if design says envelope=yes), `pagination.go` (only if API paginates), API-specific helpers (`doDownload`, `doUpload`, `doPostDelete` — see §8), per-API quirk validators.
 
@@ -467,7 +467,7 @@ Validation-error hint must name `acme skills list` so the agent self-recovers.
 | `config/config_test.go` | `t.TempDir()`; cascade priority cases (defaults → file → env → flags). |
 | `format/output_test.go` | Field filter, NDJSON, raw passthrough; sanitize cases (control chars, injection tags); envelope unwrap if applicable. |
 | `validate/input_test.go` | One case per rejection rule. |
-| `cmd/schema_test.go` or `cmd/integration_test.go` | The four-direction operation-mapping test in §11. |
+| `cmd/integration_test.go` | The four-direction operation-mapping test in §11. Keep all four in one file. |
 | `cmd/integration_test.go` | The `skills` group (§12): `skills list` default text output, `skills list --format json`, and `skills get <known>` returning body-first content. These are project-level — the shipped snippet only carries the operation-mapping directions, since it cannot know your skill set. |
 | `cmd/integration_test.go` | End-to-end: `t.Setenv("ACME_CONFIG", t.TempDir()+"/config.yaml")`, run cobra commands against `httptest.NewServer`. |
 

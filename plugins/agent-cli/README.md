@@ -77,8 +77,17 @@ cobra root, the workhorse helpers, and the spec-bijection test.
 
 They are **reference material, not a module**: there is no `go.mod`, and
 they import a deliberately fictional `github.com/example/acme-cli` that
-you replace with your own path. They are verified by assembling them into
+you replace with your own path. They were checked by assembling them into
 a throwaway module and running `go build`, `go vet` and `go test`.
+
+That assembly needs two things the snippets deliberately omit, because
+both are per-project: the embedded `openapi-spec.json`, and the
+per-resource command files. Until you supply them, the bijection test in
+`internal/cmd` fails by design — it is reporting that the spec, the
+`operationIDToCommand` map and the command tree do not yet agree, which is
+exactly its job. The other four packages pass on the snippets alone. CI
+here keeps them honest with `gofmt` and a parse check; see
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
 Unit tests ship alongside the sources. They earn their place: the defects
 they cover — integer IDs corrupted by a `float64` round-trip, query params
