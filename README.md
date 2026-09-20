@@ -19,6 +19,17 @@ npx skills add glebmish/builder-toolkit
 
 ## Plugins
 
+### agent-cli
+
+Design and implement CLIs whose primary user is an AI agent rather than a
+person — the stack-agnostic chassis (`agent-cli-design`), an OpenAPI
+overlay (`wrap-api-spec`), and a Go scaffolder with tested reference
+snippets (`agent-cli-implement`). Ships guidance and code to copy; it
+installs no binary.
+
+The three skills, and the full design stance behind them, are in the
+[plugin README →](plugins/agent-cli/README.md).
+
 ### git-history-rewrite
 
 Safety net for destructive git operations — bundles a `PreToolUse` hook that
