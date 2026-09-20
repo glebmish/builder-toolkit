@@ -70,6 +70,50 @@ jobs:
             plugins/git-history-rewrite/skills/git-history-rewrite/hooks/preflight.sh \
             plugins/git-history-rewrite/tests/git-history-rewrite/preflight.test.sh
 
+  go-snippets:
+    name: Go snippets (format + parse)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 'stable'
+
+      - name: Check formatting and syntax
+        # The snippets under agent-cli are reference material users copy,
+        # not a buildable module: there is no go.mod, they import a
+        # deliberately fictional module path, schema.go embeds a spec file
+        # that only exists in a real project, and the per-resource command
+        # files are not shipped. So `go build` / `go vet` cannot run here.
+        #
+        # gofmt still can, and it parses: it catches the failure that
+        # actually matters — a snippet with a syntax error becoming code
+        # somebody pastes. Anything deeper needs the module assembled, and
+        # that harness is deliberately not maintained in this repo.
+        run: |
+          set -eu
+          dir=plugins/agent-cli/skills/agent-cli-implement/snippets
+          echo "==> gofmt -l $dir"
+          unformatted=$(gofmt -l "$dir")
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "==> parse check"
+          fail=0
+          while IFS= read -r f; do
+            if ! gofmt -e "$f" >/dev/null; then
+              echo "::error file=$f::does not parse"
+              fail=1
+            fi
+          done < <(find "$dir" -name '*.go')
+          exit "$fail"
+
   manifests:
     name: JSON manifests
     runs-on: ubuntu-latest
