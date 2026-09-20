@@ -6,9 +6,14 @@
   },
   "metadata": {
     "description": "A collection of skills and plugins loosely related to building projects.",
-    "version": "0.1.2"
+    "version": "0.2.0"
   },
   "plugins": [
+    {
+      "name": "agent-cli",
+      "source": "./plugins/agent-cli",
+      "description": "Design and implement CLIs whose primary user is an AI agent — the stack-agnostic chassis, an OpenAPI overlay, and a Go scaffolder."
+    },
     {
       "name": "git-history-rewrite",
       "source": "./plugins/git-history-rewrite",

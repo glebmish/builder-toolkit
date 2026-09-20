@@ -86,6 +86,7 @@ jobs:
           set -eu
           for f in \
             .claude-plugin/marketplace.json \
+            plugins/agent-cli/.claude-plugin/plugin.json \
             plugins/git-history-rewrite/.claude-plugin/plugin.json \
             plugins/share-artifact/.claude-plugin/plugin.json
           do

@@ -1,0 +1,11 @@
+{
+  "name": "agent-cli",
+  "description": "Skills for designing and implementing agent-first CLIs. `design-cli` covers the stack-agnostic chassis (command surface, output contract, exit codes, auth, input hardening, pagination); `wrap-api-spec` overlays spec-anchored decisions when the CLI wraps an OpenAPI spec; `implement-cli` scaffolds the Go implementation from the resulting design doc.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Gleb Mishchenko",
+    "url": "https://github.com/glebmish"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/glebmish/builder-toolkit"
+}
